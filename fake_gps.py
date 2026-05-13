@@ -103,7 +103,9 @@ class FakeGPS:
         duration_s,
         drift_rate_mps,
         mode="random_walk",
-        seed=None
+        seed=None,
+        heading_deg=0.0,
+        alt_jitter_m=0.0
     ) -> bool:
         """生成緩慢漂移的 CSV 軌跡"""
         dt = 1.0 / self.update_rate_hz
@@ -112,8 +114,8 @@ class FakeGPS:
 
         lat = start_lat
         lon = start_lon
-        alt = start_alt
-        heading = rng.uniform(0.0, 2.0 * math.pi)
+        base_alt = start_alt
+        heading = math.radians(heading_deg) if mode == "fixed_heading" else rng.uniform(0.0, 2.0 * math.pi)
         heading_sigma = math.radians(5.0)
 
         try:
@@ -129,6 +131,12 @@ class FakeGPS:
                     d_north = math.cos(heading) * distance
                     d_east = math.sin(heading) * distance
                     lat, lon = self._offset_lat_lon_m(lat, lon, d_north, d_east)
+
+                    alt = base_alt
+                    if alt_jitter_m > 0:
+                        jitter = rng.gauss(0.0, alt_jitter_m / 3.0)
+                        jitter = max(-alt_jitter_m, min(alt_jitter_m, jitter))
+                        alt = base_alt + jitter
 
                     current_time += dt
                     f.write(f"{current_time:.1f},{lat:.6f},{lon:.6f},{alt:.1f}\n")
@@ -198,7 +206,9 @@ class FakeGPS:
             drift_rate_mps=0.05,
             drift_mode="random_walk",
             drift_seed=None,
-            drift_duration_s=None
+            drift_duration_s=None,
+            drift_heading_deg=0.0,
+            drift_alt_jitter_m=0.0
         ) -> bool:
         """
         呼叫 gps-sdr-sim 生成 .bin 檔案
@@ -262,7 +272,9 @@ class FakeGPS:
                     duration_s=duration,
                     drift_rate_mps=drift_rate_mps,
                     mode=drift_mode,
-                    seed=drift_seed
+                    seed=drift_seed,
+                    heading_deg=drift_heading_deg,
+                    alt_jitter_m=drift_alt_jitter_m
                 )
                 if not ok:
                     return False

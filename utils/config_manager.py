@@ -13,7 +13,9 @@ DEFAULT_CONFIG = {
     "gps_sim": {
         "default_speed_mps": 5.0,
         "default_height": 100.0,
-        "update_rate_hz": 10.0
+        "update_rate_hz": 10.0,
+        "drift_heading_deg": 0.0,
+        "drift_alt_jitter_m": 0.1
     },
     "ephemeris": {
         "save_dir": "data/ephemeris",

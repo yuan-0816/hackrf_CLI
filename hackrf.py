@@ -312,10 +312,17 @@ def cmd_gps_drift():
     lat, lon, alt = coords
     drift_rate_mps = prompt_float("  漂移速度 (m/s)", DEFAULT_DRIFT_RATE_MPS)
     drift_duration_s = prompt_int("  飄移時間/播放秒數 (秒)", DEFAULT_DRIFT_DURATION_S)
+    drift_heading_deg = cfg.get("gps_sim.drift_heading_deg", 0.0)
+    drift_alt_jitter_m = prompt_float(
+        "  高度微小跳動 (m)",
+        cfg.get("gps_sim.drift_alt_jitter_m", 0.1)
+    )
 
     print(f"\n  起點座標: {lat}, {lon}, alt={alt}m")
     print(f"  漂移速度: {drift_rate_mps} m/s")
     print(f"  飄移/播放: {drift_duration_s} 秒")
+    print(f"  方位角    : {drift_heading_deg} deg")
+    print(f"  高度跳動  : +/- {drift_alt_jitter_m} m")
 
     output_bin = os.path.join(BIN_DIR, f"drift_{lat:.5f}_{lon:.5f}.bin")
     sim = _make_simulator()
@@ -325,7 +332,10 @@ def cmd_gps_drift():
         manual_coords=(lat, lon, alt),
         drift_enabled=True,
         drift_rate_mps=drift_rate_mps,
-        drift_duration_s=drift_duration_s
+        drift_duration_s=drift_duration_s,
+        drift_mode="fixed_heading",
+        drift_heading_deg=drift_heading_deg,
+        drift_alt_jitter_m=drift_alt_jitter_m
     )
     if not ok:
         print("  [X] Bin 檔案生成失敗")
