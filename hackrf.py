@@ -32,6 +32,7 @@ KML_DIR      = os.path.join(PROJECT_ROOT, "data", "fake_path")
 CSV_DIR      = os.path.join(PROJECT_ROOT, "data", "fake_path")
 
 DEFAULT_DRIFT_RATE_MPS = 0.05
+DEFAULT_DRIFT_DURATION_S = 300
 
 # ── 全域實例 ──────────────────────────────────────────────────────────────────
 
@@ -300,6 +301,43 @@ def cmd_gps_dynamic(args=None):
     _transmit(output_bin, repeat=0)
 
 
+def cmd_gps_drift():
+    """緩慢飄移誘騙 (靜態點位 + 漂移)"""
+    header("GPS 緩慢飄移誘騙")
+
+    coords = prompt_coords(cfg.get("gps_sim.default_height", 100.0))
+    if not coords:
+        return
+
+    lat, lon, alt = coords
+    drift_rate_mps = prompt_float("  漂移速度 (m/s)", DEFAULT_DRIFT_RATE_MPS)
+    drift_duration_s = prompt_int("  飄移時間/播放秒數 (秒)", DEFAULT_DRIFT_DURATION_S)
+
+    print(f"\n  起點座標: {lat}, {lon}, alt={alt}m")
+    print(f"  漂移速度: {drift_rate_mps} m/s")
+    print(f"  飄移/播放: {drift_duration_s} 秒")
+
+    output_bin = os.path.join(BIN_DIR, f"drift_{lat:.5f}_{lon:.5f}.bin")
+    sim = _make_simulator()
+    ok = sim.generate_bin(
+        output_bin=output_bin,
+        static_mode=True,
+        manual_coords=(lat, lon, alt),
+        drift_enabled=True,
+        drift_rate_mps=drift_rate_mps,
+        drift_duration_s=drift_duration_s
+    )
+    if not ok:
+        print("  [X] Bin 檔案生成失敗")
+        return
+
+    if not confirm("\n  是否立即發射?"):
+        print(f"  [V] Bin 已儲存: {output_bin}")
+        return
+
+    _transmit(output_bin, repeat=drift_duration_s)
+
+
 def cmd_record(args=None):
     """錄製訊號"""
     header("錄製訊號")
@@ -523,6 +561,7 @@ def _menu_gps():
         header("GPS 模擬")
         print("  1. 靜態點位")
         print("  2. 動態軌跡 (KML)")
+        print("  3. 緩慢飄移誘騙")
         print("  0. 返回")
         choice = prompt("\n  請選擇")
 
@@ -530,6 +569,8 @@ def _menu_gps():
             cmd_gps_static()
         elif choice == "2":
             cmd_gps_dynamic()
+        elif choice == "3":
+            cmd_gps_drift()
         elif choice == "0":
             break
 
