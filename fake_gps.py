@@ -115,6 +115,7 @@ class FakeGPS:
         lat = start_lat
         lon = start_lon
         base_alt = start_alt
+        alt = base_alt
         heading = math.radians(heading_deg) if mode == "fixed_heading" else rng.uniform(0.0, 2.0 * math.pi)
         heading_sigma = math.radians(5.0)
 
