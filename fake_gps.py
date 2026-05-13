@@ -123,7 +123,7 @@ class FakeGPS:
         # OU 過程參數（fixed_heading 用）：
         # ou_sigma    — 每步的隨機擾動幅度（弧度），控制路徑的「抖動感」
         # ou_reversion — 回歸原方向的強度 [0,1]，越大回得越快、偏離越小
-        ou_sigma = math.radians(1.5)
+        ou_sigma = math.radians(0.5)
         ou_reversion = 0.05
         heading_offset = 0.0
 
