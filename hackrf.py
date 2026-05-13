@@ -63,8 +63,8 @@ def _parse_coords_line(line: str, default_alt: float) -> tuple[float, float, flo
     if len(parts) not in (2, 3):
         return None
     try:
-        lon = float(parts[0])
-        lat = float(parts[1])
+        lat = float(parts[0])
+        lon = float(parts[1])
         alt = float(parts[2]) if len(parts) == 3 else float(default_alt)
     except ValueError:
         return None
@@ -72,7 +72,7 @@ def _parse_coords_line(line: str, default_alt: float) -> tuple[float, float, flo
 
 def prompt_coords(default_alt: float) -> tuple[float, float, float] | None:
     while True:
-        line = prompt("  一次輸入 經度 緯度 高度 (例如: 55 33 100, 0=返回)", "")
+        line = prompt("  一次輸入 緯度 經度 高度 (例如: 25.03 121.56 100, 0=返回)", "")
         if not line:
             lat = prompt_float("  緯度 (lat)")
             lon = prompt_float("  經度 (lon)")
@@ -85,7 +85,7 @@ def prompt_coords(default_alt: float) -> tuple[float, float, float] | None:
         parsed = _parse_coords_line(line, default_alt)
         if parsed:
             return parsed
-        print("  [!] 請輸入 2~3 個數字，例如: 55 33 100")
+        print("  [!] 請輸入 2~3 個數字，例如: 25.03 121.56 100")
 
 def prompt_int(text: str, default=None) -> int:
     while True:
