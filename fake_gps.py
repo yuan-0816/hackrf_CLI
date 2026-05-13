@@ -116,8 +116,16 @@ class FakeGPS:
         lon = start_lon
         base_alt = start_alt
         alt = base_alt
-        heading = math.radians(heading_deg) if mode == "fixed_heading" else rng.uniform(0.0, 2.0 * math.pi)
+        bias_heading = math.radians(heading_deg)
+        heading = bias_heading if mode == "fixed_heading" else rng.uniform(0.0, 2.0 * math.pi)
         heading_sigma = math.radians(5.0)
+
+        # OU 過程參數（fixed_heading 用）：
+        # ou_sigma    — 每步的隨機擾動幅度（弧度），控制路徑的「抖動感」
+        # ou_reversion — 回歸原方向的強度 [0,1]，越大回得越快、偏離越小
+        ou_sigma = math.radians(1.5)
+        ou_reversion = 0.05
+        heading_offset = 0.0
 
         try:
             with open(csv_file, "w") as f:
@@ -127,6 +135,10 @@ class FakeGPS:
                 for _ in range(steps):
                     if mode == "random_walk":
                         heading += rng.gauss(0.0, heading_sigma)
+                    elif mode == "fixed_heading":
+                        # OU: offset 緩慢漂移但持續被拉回 0
+                        heading_offset = heading_offset * (1.0 - ou_reversion) + rng.gauss(0.0, ou_sigma)
+                        heading = bias_heading + heading_offset
 
                     distance = drift_rate_mps * dt
                     d_north = math.cos(heading) * distance
