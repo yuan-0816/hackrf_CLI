@@ -1,0 +1,25 @@
+{
+  "hackrf": {
+    "default_freq": 1575420000,
+    "sample_rate": 2600000,
+    "tx_gain": 47,
+    "lna_gain": 16,
+    "vga_gain": 20
+  },
+  "gps_sim": {
+    "default_speed_mps": 5.0,
+    "default_height": 100.0,
+    "update_rate_hz": 10.0
+  },
+  "ephemeris": {
+    "save_dir": "data/ephemeris",
+    "max_files": 5
+  },
+  "presets": {
+    "南投": {
+      "lat": 23.796517,
+      "lon": 120.982239,
+      "alt": 5.0
+    }
+  }
+}
