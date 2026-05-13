@@ -251,6 +251,9 @@ class FakeGPS:
         print(f"[*] 開始生成 GPS 基頻信號 (這可能需要幾分鐘)...")
         print(f"    - 星曆: {ephemeris_file_path}")
         
+        # 確保輸出目錄存在（必須在寫 drift CSV 之前）
+        os.makedirs(os.path.dirname(output_bin), exist_ok=True)
+
         # 準備基礎指令
         cmd = [
             self.gps_sim_exe_path,
@@ -312,9 +315,6 @@ class FakeGPS:
             print(f"    - 模式: 動態軌跡 (Dynamic)")     
             print(f"    - 軌跡: {csv_file}")
             cmd.extend(["-u", csv_file])
-        
-        # 確保輸出目錄存在
-        os.makedirs(os.path.dirname(output_bin), exist_ok=True)
         
         try:
             # 執行 gps-sdr-sim
