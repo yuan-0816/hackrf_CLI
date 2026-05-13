@@ -31,6 +31,8 @@ RECORD_DIR   = os.path.join(PROJECT_ROOT, "data", "recorded")
 KML_DIR      = os.path.join(PROJECT_ROOT, "data", "fake_path")
 CSV_DIR      = os.path.join(PROJECT_ROOT, "data", "fake_path")
 
+DEFAULT_DRIFT_RATE_MPS = 0.05
+
 # ── 全域實例 ──────────────────────────────────────────────────────────────────
 
 cfg    = ConfigManager()
@@ -188,6 +190,10 @@ def cmd_gps_static(args=None):
     lat = lon = alt = None
     repeat = 0  # 0 = 無限
 
+    drift_enabled = False
+    drift_rate_mps = DEFAULT_DRIFT_RATE_MPS
+    drift_seed = None
+
     if args and (args.lat or args.preset):
         # CLI 模式
         if args.preset:
@@ -202,6 +208,10 @@ def cmd_gps_static(args=None):
                 return
             lat, lon, alt = args.lat, args.lon, args.alt
         repeat = args.repeat
+        if args.drift or args.drift_rate is not None or args.drift_seed is not None:
+            drift_enabled = True
+            drift_rate_mps = args.drift_rate if args.drift_rate is not None else DEFAULT_DRIFT_RATE_MPS
+            drift_seed = args.drift_seed
     else:
         # 互動模式
         presets = cfg.preset_list()
@@ -218,6 +228,9 @@ def cmd_gps_static(args=None):
             lat, lon, alt = coords
 
         repeat = prompt_int("  重複播放時間 (秒, 0=無限)", 0)
+        if confirm("  啟用緩慢漂移?"):
+            drift_enabled = True
+            drift_rate_mps = prompt_float("  漂移速度 (m/s)", DEFAULT_DRIFT_RATE_MPS)
 
     print(f"\n  座標: {lat}, {lon}, alt={alt}m")
 
@@ -227,7 +240,10 @@ def cmd_gps_static(args=None):
     ok = sim.generate_bin(
         output_bin=output_bin,
         static_mode=True,
-        manual_coords=(lat, lon, alt)
+        manual_coords=(lat, lon, alt),
+        drift_enabled=drift_enabled,
+        drift_rate_mps=drift_rate_mps,
+        drift_seed=drift_seed
     )
     if not ok:
         print("  [X] Bin 檔案生成失敗")
@@ -638,6 +654,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--preset", type=str,   help="使用已儲存的 Preset 名稱")
     s.add_argument("--repeat", type=int,   default=0,
                    help="播放秒數 (0=無限, 預設 0)")
+    s.add_argument("--drift", action="store_true", help="啟用緩慢漂移 (random walk)")
+    s.add_argument("--drift-rate", type=float, default=None,
+                   help="漂移速度 m/s (預設 0.05)")
+    s.add_argument("--drift-seed", type=int, default=None,
+                   help="漂移亂數種子 (選用)")
 
     d = gps_sub.add_parser("dynamic", help="動態軌跡模擬 (KML)")
     d.add_argument("--kml", type=str, help="KML 檔案路徑")

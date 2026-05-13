@@ -5,6 +5,7 @@ import sys
 import subprocess
 import time
 import signal
+import random
 
 from utils.get_latest_brdc import fetch_latest_ephemeris, check_newst_brdc
 from utils.tool import *
@@ -83,6 +84,62 @@ class FakeGPS:
             print(f"[Error] 解析 KML 失敗: {e}")
             sys.exit(1)
 
+    def _offset_lat_lon_m(self, lat, lon, d_north_m, d_east_m):
+        """以公尺位移量更新座標 (近似)"""
+        meters_per_deg_lat = 111320.0
+        meters_per_deg_lon = 111320.0 * math.cos(math.radians(lat))
+        if meters_per_deg_lon == 0:
+            meters_per_deg_lon = 1e-6
+        new_lat = lat + (d_north_m / meters_per_deg_lat)
+        new_lon = lon + (d_east_m / meters_per_deg_lon)
+        return new_lat, new_lon
+
+    def _generate_drift_csv(
+        self,
+        csv_file,
+        start_lat,
+        start_lon,
+        start_alt,
+        duration_s,
+        drift_rate_mps,
+        mode="random_walk",
+        seed=None
+    ) -> bool:
+        """生成緩慢漂移的 CSV 軌跡"""
+        dt = 1.0 / self.update_rate_hz
+        steps = int(duration_s / dt)
+        rng = random.Random(seed)
+
+        lat = start_lat
+        lon = start_lon
+        alt = start_alt
+        heading = rng.uniform(0.0, 2.0 * math.pi)
+        heading_sigma = math.radians(5.0)
+
+        try:
+            with open(csv_file, "w") as f:
+                current_time = 0.0
+                f.write(f"{current_time:.1f},{lat:.6f},{lon:.6f},{alt:.1f}\n")
+
+                for _ in range(steps):
+                    if mode == "random_walk":
+                        heading += rng.gauss(0.0, heading_sigma)
+
+                    distance = drift_rate_mps * dt
+                    d_north = math.cos(heading) * distance
+                    d_east = math.sin(heading) * distance
+                    lat, lon = self._offset_lat_lon_m(lat, lon, d_north, d_east)
+
+                    current_time += dt
+                    f.write(f"{current_time:.1f},{lat:.6f},{lon:.6f},{alt:.1f}\n")
+
+            self.total_duration = current_time
+            print(f"[V] 漂移 CSV 生成完成: {csv_file} (時長: {self.total_duration:.1f}s)")
+            return True
+        except IOError as e:
+            print(f"[Error] 寫入漂移 CSV 失敗: {e}")
+            return False
+
 
     def kml_to_csv(self, kml_file, csv_file)-> bool:
         """KML 轉 CSV (含插值)"""
@@ -136,7 +193,12 @@ class FakeGPS:
             ephemeris_file_path=None,
             static_mode=False,
             manual_coords=None,
-            csv_file=None
+            csv_file=None,
+            drift_enabled=False,
+            drift_rate_mps=0.05,
+            drift_mode="random_walk",
+            drift_seed=None,
+            drift_duration_s=None
         ) -> bool:
         """
         呼叫 gps-sdr-sim 生成 .bin 檔案
@@ -183,15 +245,38 @@ class FakeGPS:
                 return False
 
             lat, lon, alt = manual_coords
-            duration = 60 # 預設生成 5 分鐘
+            duration = drift_duration_s if drift_duration_s is not None else 60
             
-            print(f"    - 模式: 靜態定點 (Static)")
-            print(f"    - 座標: {lat}, {lon}, {alt}")
-            print(f"    - 時間: {duration} 秒")
-            
-            cmd.extend(["-l", f"{lat},{lon},{alt}"])
-            cmd.extend(["-d", str(duration)])
-            output_bin = output_bin.replace(".bin", f"_static.bin")
+            if drift_enabled:
+                drift_csv = os.path.splitext(output_bin)[0] + "_drift.csv"
+                print(f"    - 模式: 靜態定點 + 緩慢漂移")
+                print(f"    - 起點座標: {lat}, {lon}, {alt}")
+                print(f"    - 漂移速度: {drift_rate_mps} m/s")
+                print(f"    - 漂移時間: {duration} 秒")
+
+                ok = self._generate_drift_csv(
+                    csv_file=drift_csv,
+                    start_lat=lat,
+                    start_lon=lon,
+                    start_alt=alt,
+                    duration_s=duration,
+                    drift_rate_mps=drift_rate_mps,
+                    mode=drift_mode,
+                    seed=drift_seed
+                )
+                if not ok:
+                    return False
+
+                cmd.extend(["-u", drift_csv])
+                output_bin = output_bin.replace(".bin", f"_drift.bin")
+            else:
+                print(f"    - 模式: 靜態定點 (Static)")
+                print(f"    - 座標: {lat}, {lon}, {alt}")
+                print(f"    - 時間: {duration} 秒")
+
+                cmd.extend(["-l", f"{lat},{lon},{alt}"])
+                cmd.extend(["-d", str(duration)])
+                output_bin = output_bin.replace(".bin", f"_static.bin")
             
         else:
             # --- 動態模式 (軌跡) ---
