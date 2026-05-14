@@ -246,13 +246,11 @@ def cmd_gps_static(args=None):
             lat, lon, alt = coords
 
         repeat = prompt_int("  重複播放時間 (秒, 0=無限)", 0)
-        if confirm("  啟用緩慢漂移?"):
-            drift_enabled = True
-            drift_rate_mps = prompt_float("  漂移速度 (m/s)", DEFAULT_DRIFT_RATE_MPS)
 
     print(f"\n  座標: {lat}, {lon}, alt={alt}m")
 
     output_bin = os.path.join(BIN_DIR, f"static_{lat:.5f}_{lon:.5f}.bin")
+    os.makedirs(BIN_DIR, exist_ok=True)
     sim = _make_simulator()
     ok = sim.generate_bin(
         output_bin=output_bin,
@@ -333,6 +331,9 @@ def cmd_gps_traction(args=None):
 
     csv_file   = os.path.join(CSV_DIR, f"traction_{lat:.5f}_{lon:.5f}.csv")
     output_bin = os.path.join(BIN_DIR,  f"traction_{lat:.5f}_{lon:.5f}.bin")
+
+    os.makedirs(CSV_DIR, exist_ok=True)
+    os.makedirs(BIN_DIR, exist_ok=True)
 
     sim = _make_simulator()
 
