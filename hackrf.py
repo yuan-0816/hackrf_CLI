@@ -9,6 +9,7 @@ HackRF CLI
 """
 
 import argparse
+import unicodedata
 import os
 import re
 import subprocess
@@ -122,6 +123,21 @@ def _select_preset(presets: dict, label: str = "Preset") -> tuple[str, dict] | N
 
     print("  [!] 無效的選擇")
     return None
+
+
+def _display_width(text: object) -> int:
+    width = 0
+    for ch in str(text):
+        width += 2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1
+    return width
+
+
+def _pad_display(text: object, width: int, align: str = "<") -> str:
+    text = str(text)
+    padding = max(width - _display_width(text), 0)
+    if align == ">":
+        return " " * padding + text
+    return text + " " * padding
 
 def confirm(text: str) -> bool:
     return prompt(f"{text} (y/n)", "n").lower() == "y"
@@ -454,10 +470,33 @@ def _show_preset_table(presets: dict):
     if not presets:
         print("  (尚無 Preset)")
         return
-    print(f"  {'ID':>3} {'名稱':<16} {'緯度':>12} {'經度':>13} {'高度':>8}")
-    print(f"  {'─'*3} {'─'*16} {'─'*12} {'─'*13} {'─'*8}")
+
+    id_w, name_w, lat_w, lon_w, alt_w = 3, 16, 12, 13, 8
+    print(
+        "  "
+        + _pad_display("ID", id_w, ">") + " "
+        + _pad_display("名稱", name_w) + " "
+        + _pad_display("緯度", lat_w, ">") + " "
+        + _pad_display("經度", lon_w, ">") + " "
+        + _pad_display("高度", alt_w, ">")
+    )
+    print(
+        "  "
+        + "-" * id_w + " "
+        + "-" * name_w + " "
+        + "-" * lat_w + " "
+        + "-" * lon_w + " "
+        + "-" * alt_w
+    )
     for idx, (name, p) in enumerate(_sorted_presets(presets), 1):
-        print(f"  {idx:>3} {name:<16} {p['lat']:>12.6f} {p['lon']:>13.6f} {p['alt']:>7.1f}m")
+        print(
+            "  "
+            + _pad_display(idx, id_w, ">") + " "
+            + _pad_display(name, name_w) + " "
+            + _pad_display(f"{p['lat']:.6f}", lat_w, ">") + " "
+            + _pad_display(f"{p['lon']:.6f}", lon_w, ">") + " "
+            + _pad_display(f"{p['alt']:.1f}m", alt_w, ">")
+        )
 
 
 # ── Config 指令 ───────────────────────────────────────────────────────────────
@@ -587,7 +626,7 @@ def _menu_gps():
 
 def run_interactive_menu():
     while True:
-        header("HackRF CLI")
+        header("無人機資安GPS檢測工具")
         print("  1. 查看硬體資訊")
         print("  2. 更新星歷檔案")
         print("  3. GPS 模擬")

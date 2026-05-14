@@ -1,0 +1,8 @@
+[project]
+name = "hackrf-cli"
+version = "0.1.0"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "python-dotenv>=1.2.2",
+    "requests>=2.34.0",
+]

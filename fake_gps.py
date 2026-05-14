@@ -31,10 +31,20 @@ class FakeGPS:
         self.target_speed_mps = target_speed_mps
         self.update_rate_hz = update_rate_hz
         self.default_height = default_height
-        self.gps_sim_exe_path = gps_sim_exe_path
+        self.gps_sim_exe_path = self._resolve_executable_path(gps_sim_exe_path)
 
         self.hackrf = HackRFCLI()
 
+    def _resolve_executable_path(self, exe_path: str) -> str:
+        if os.path.exists(exe_path):
+            return exe_path
+
+        if os.name == "nt" and not exe_path.lower().endswith(".exe"):
+            exe_path_with_ext = exe_path + ".exe"
+            if os.path.exists(exe_path_with_ext):
+                return exe_path_with_ext
+
+        return exe_path
 
     def _get_dist_meters(self, lat1, lon1, lat2, lon2) -> float:
         """計算兩點間的距離 (Haversine formula)"""
