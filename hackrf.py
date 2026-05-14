@@ -324,40 +324,64 @@ def cmd_gps_traction(args=None):
         print("  此模式從無人機「真實 GPS 位置」出發，緩慢牽引移動。")
         print(f"  EKF3 安全速度 <= 1.0 m/s，安全加速度 <= {EK3_SAFE_ACCEL} m/s^2\n")
 
-        print("  [步驟 1/4] 輸入無人機當前真實座標")
-        coords = prompt_coords(cfg.get("gps_sim.default_height", 50.0))
-        if not coords:
-            return
-        lat, lon, alt = coords
+        lat = lon = alt = None
+        heading = 0.0
+        speed = 0.5
+        ramp = 20.0
+        duration = 120.0
+        step = 1
 
-        print("\n  [步驟 2/4] 設定誘騙方向")
-        print("    0° = 正北  |  90° = 正東  |  180° = 正南  |  270° = 正西")
-        heading = prompt_float_or_back("  方向 (度, b=返回)", 0.0)
-        if heading is None:
-            return
+        while True:
+            if step == 1:
+                print("  [步驟 1/4] 輸入無人機當前真實座標")
+                coords = prompt_coords(cfg.get("gps_sim.default_height", 50.0))
+                if not coords:
+                    return
+                lat, lon, alt = coords
+                step = 2
 
-        print("\n  [步驟 3/4] 設定速度")
-        print(f"    建議 <= 1.0 m/s（保守）  最大 {EK3_VEL_GATE} m/s（EKF3 門檻）")
-        speed = prompt_float_or_back("  目標速度 (m/s, b=返回)", 0.5)
-        if speed is None:
-            return
-        if speed > EK3_VEL_GATE:
-            print(f"  [Warning] {speed} m/s 超過 EKF3 速度門檻，可能觸發 Glitch 保護！")
+            elif step == 2:
+                print("\n  [步驟 2/4] 設定誘騙方向")
+                print("    0° = 正北  |  90° = 正東  |  180° = 正南  |  270° = 正西")
+                val = prompt_float_or_back("  方向 (度, b=返回)", heading)
+                if val is None:
+                    step = 1
+                    print()
+                else:
+                    heading = val
+                    step = 3
 
-        min_ramp = speed / EK3_SAFE_ACCEL
-        print(f"\n  [步驟 4/4] 設定時長")
-        print(f"    加速時間建議 >= {min_ramp:.1f} s（加速度 <= {EK3_SAFE_ACCEL} m/s^2）")
-        ramp = prompt_float_or_back("  加速時間 (s, b=返回)", max(min_ramp, 20.0))
-        if ramp is None:
-            return
+            elif step == 3:
+                print("\n  [步驟 3/4] 設定速度")
+                print(f"    建議 <= 1.0 m/s（保守）  最大 {EK3_VEL_GATE} m/s（EKF3 門檻）")
+                val = prompt_float_or_back("  目標速度 (m/s, b=返回)", speed)
+                if val is None:
+                    step = 2
+                else:
+                    speed = val
+                    if speed > EK3_VEL_GATE:
+                        print(f"  [Warning] {speed} m/s 超過 EKF3 速度門檻，可能觸發 Glitch 保護！")
+                    step = 4
 
-        accel = speed / ramp if ramp > 0 else float("inf")
-        accel_warn = "  [Warning] 超過安全上限！" if accel > EK3_SAFE_ACCEL else "  [V]"
-        print(f"  加速度: {accel:.3f} m/s^2  {accel_warn}")
+            elif step == 4:
+                min_ramp = speed / EK3_SAFE_ACCEL
+                print(f"\n  [步驟 4/4] 設定時長")
+                print(f"    加速時間建議 >= {min_ramp:.1f} s（加速度 <= {EK3_SAFE_ACCEL} m/s^2）")
+                val = prompt_float_or_back("  加速時間 (s, b=返回)", max(ramp, min_ramp))
+                if val is None:
+                    step = 3
+                else:
+                    ramp = val
+                    accel = speed / ramp if ramp > 0 else float("inf")
+                    accel_warn = "  [Warning] 超過安全上限！" if accel > EK3_SAFE_ACCEL else "  [V]"
+                    print(f"  加速度: {accel:.3f} m/s^2  {accel_warn}")
 
-        duration = prompt_float_or_back("  誘騙總時長 (s, b=返回)", 120.0)
-        if duration is None:
-            return
+                    val = prompt_float_or_back("  誘騙總時長 (s, b=返回)", duration)
+                    if val is None:
+                        step = 4
+                    else:
+                        duration = val
+                        break
 
     accel = speed / ramp if ramp > 0 else float("inf")
     cruise_t = max(duration - ramp, 0)
@@ -394,12 +418,12 @@ def cmd_gps_traction(args=None):
         print("  [X] CSV 生成失敗")
         return
 
-    ok = sim.generate_bin(
+    output_bin = sim.generate_bin(
         output_bin=output_bin,
         static_mode=False,
         csv_file=csv_file,
     )
-    if not ok:
+    if not output_bin:
         print("  [X] Bin 生成失敗")
         return
 
