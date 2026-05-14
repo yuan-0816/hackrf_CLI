@@ -132,7 +132,7 @@ class FakeGPS:
         try:
             with open(csv_file, "w") as f:
                 current_time = 0.0
-                f.write(f"{current_time:.1f},{lat:.6f},{lon:.6f},{alt:.1f}\n")
+                f.write(f"{current_time:.1f},{lat:.9f},{lon:.9f},{alt:.1f}\n")
 
                 for _ in range(steps):
                     if mode == "random_walk":
@@ -150,7 +150,7 @@ class FakeGPS:
                         alt = base_alt + jitter
 
                     current_time += dt
-                    f.write(f"{current_time:.1f},{lat:.6f},{lon:.6f},{alt:.1f}\n")
+                    f.write(f"{current_time:.1f},{lat:.9f},{lon:.9f},{alt:.1f}\n")
 
             self.total_duration = current_time
             print(f"[V] 漂移 CSV 生成完成: {csv_file} (時長: {self.total_duration:.1f}s)")
@@ -176,7 +176,7 @@ class FakeGPS:
             with open(csv_file, 'w') as f:
                 # 起點
                 start_lat, start_lon, start_alt = points[0]
-                f.write(f"{current_time:.1f},{start_lat:.6f},{start_lon:.6f},{start_alt:.1f}\n")
+                f.write(f"{current_time:.1f},{start_lat:.9f},{start_lon:.9f},{start_alt:.1f}\n")
                 
                 for i in range(len(points) - 1):
                     p1 = points[i]
@@ -197,7 +197,7 @@ class FakeGPS:
                         new_lat = p1[0] + lat_step * s
                         new_lon = p1[1] + lon_step * s
                         new_alt = p1[2] + alt_step * s
-                        f.write(f"{current_time:.1f},{new_lat:.6f},{new_lon:.6f},{new_alt:.1f}\n")
+                        f.write(f"{current_time:.1f},{new_lat:.9f},{new_lon:.9f},{new_alt:.1f}\n")
             
             self.total_duration = current_time
             print(f"[V] CSV 轉換完成: {csv_file} (時長: {self.total_duration:.1f}s)")
@@ -242,6 +242,14 @@ class FakeGPS:
         heading_rad = math.radians(heading_deg)
         lat, lon, alt = start_lat, start_lon, start_alt
 
+        min_step_m = 1e-9 * 111320 * 2
+        step_dist = target_speed_mps * dt
+        if step_dist < min_step_m:
+            print(
+                f"[Warning] 每步位移 {step_dist*1000:.3f} mm 接近 9 位精度下限 {min_step_m*1000:.3f} mm，"
+                f"建議降低 update_rate_hz（目前 {self.update_rate_hz} Hz）或提高速度"
+            )
+
         move_duration_s = max(0.0, total_duration_s - hold_duration_s)
         hold_steps = int(hold_duration_s / dt)
         move_steps = int(move_duration_s / dt)
@@ -249,12 +257,12 @@ class FakeGPS:
         try:
             with open(csv_file, "w") as f:
                 current_time = 0.0
-                f.write(f"{current_time:.1f},{lat:.6f},{lon:.6f},{alt:.1f}\n")
+                f.write(f"{current_time:.1f},{lat:.9f},{lon:.9f},{alt:.1f}\n")
 
                 # Phase 1: 靜止駐留，讓 EKF3 信任偽造 GPS 源
                 for _ in range(hold_steps):
                     current_time += dt
-                    f.write(f"{current_time:.1f},{lat:.6f},{lon:.6f},{alt:.1f}\n")
+                    f.write(f"{current_time:.1f},{lat:.9f},{lon:.9f},{alt:.1f}\n")
 
                 # Phase 2: S-curve 加速移動
                 elapsed_move = 0.0
@@ -266,7 +274,7 @@ class FakeGPS:
                     lat, lon = self._offset_lat_lon_m(lat, lon, d_north, d_east)
                     elapsed_move += dt
                     current_time += dt
-                    f.write(f"{current_time:.1f},{lat:.6f},{lon:.6f},{alt:.1f}\n")
+                    f.write(f"{current_time:.1f},{lat:.9f},{lon:.9f},{alt:.1f}\n")
 
             self.total_duration = current_time
             print(

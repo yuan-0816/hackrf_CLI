@@ -320,6 +320,7 @@ def cmd_gps_traction(args=None):
         speed    = args.speed
         ramp     = args.ramp
         duration = args.duration
+        hold     = args.hold
     else:
         print("  此模式從無人機「真實 GPS 位置」出發，緩慢牽引移動。")
         print(f"  EKF3 安全速度 <= 1.0 m/s，安全加速度 <= {EK3_SAFE_ACCEL} m/s^2\n")
@@ -329,6 +330,7 @@ def cmd_gps_traction(args=None):
         speed = 0.5
         ramp = 20.0
         duration = 120.0
+        hold = 10.0
         step = 1
 
         while True:
@@ -364,35 +366,42 @@ def cmd_gps_traction(args=None):
                     step = 4
 
             elif step == 4:
-                min_ramp = speed / EK3_SAFE_ACCEL
+                min_ramp = 1.5 * speed / EK3_SAFE_ACCEL
                 print(f"\n  [步驟 4/4] 設定時長")
-                print(f"    加速時間建議 >= {min_ramp:.1f} s（加速度 <= {EK3_SAFE_ACCEL} m/s^2）")
+                print(f"    加速時間建議 >= {min_ramp:.1f} s（S-curve 峰值加速度 <= {EK3_SAFE_ACCEL} m/s^2）")
                 val = prompt_float_or_back("  加速時間 (s, b=返回)", max(ramp, min_ramp))
                 if val is None:
                     step = 3
                 else:
                     ramp = val
-                    accel = speed / ramp if ramp > 0 else float("inf")
-                    accel_warn = "  [Warning] 超過安全上限！" if accel > EK3_SAFE_ACCEL else "  [V]"
-                    print(f"  加速度: {accel:.3f} m/s^2  {accel_warn}")
+                    peak_accel = 1.5 * speed / ramp if ramp > 0 else float("inf")
+                    accel_warn = "  [Warning] 超過安全上限！" if peak_accel > EK3_SAFE_ACCEL else "  [V]"
+                    print(f"  S-curve 峰值加速度: {peak_accel:.3f} m/s^2  {accel_warn}")
 
                     val = prompt_float_or_back("  誘騙總時長 (s, b=返回)", duration)
                     if val is None:
                         step = 4
                     else:
                         duration = val
-                        break
+                        val = prompt_float_or_back("  EKF3 接受駐留時間 (s, b=返回)", hold)
+                        if val is None:
+                            step = 4
+                        else:
+                            hold = val
+                            break
 
-    accel = speed / ramp if ramp > 0 else float("inf")
-    cruise_t = max(duration - ramp, 0)
+    peak_accel = 1.5 * speed / ramp if ramp > 0 else float("inf")
+    move_t = max(duration - hold, 0)
+    cruise_t = max(move_t - ramp, 0)
     est_dist = 0.5 * speed * ramp + speed * cruise_t
 
     print(f"\n  ── 執行摘要 ─────────────────────────────")
     print(f"  起始座標 : {lat:.6f}, {lon:.6f}, Alt={alt:.1f}m")
     print(f"  方向     : {heading}°（0=正北, 90=正東）")
     print(f"  目標速度 : {speed} m/s")
-    print(f"  加速時間 : {ramp} s  →  加速度 {accel:.3f} m/s^2")
-    print(f"  總時長   : {duration} s  →  預計移動 ≈ {est_dist:.0f} m")
+    print(f"  加速時間 : {ramp} s  →  S-curve 峰值加速度 {peak_accel:.3f} m/s^2")
+    print(f"  駐留時間 : {hold} s  (EKF3 接受偽造 GPS 源)")
+    print(f"  總時長   : {duration} s  →  預計移動 ≈ {est_dist:.1f} m")
     print(f"  ─────────────────────────────────────────")
 
     if args is None and not confirm("\n  確認執行?"):
@@ -413,6 +422,7 @@ def cmd_gps_traction(args=None):
         target_speed_mps=speed,
         ramp_duration_s=ramp,
         total_duration_s=duration,
+        hold_duration_s=hold,
     )
     if not ok:
         print("  [X] CSV 生成失敗")
@@ -885,6 +895,7 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--speed",    type=float, default=0.5,   help="目標速度 m/s (建議 <= 1.0, 預設 0.5)")
     t.add_argument("--ramp",     type=float, default=20.0,  help="加速時間 s (預設 20)")
     t.add_argument("--duration", type=float, default=120.0, help="總時長 s (預設 120)")
+    t.add_argument("--hold",     type=float, default=10.0,  help="EKF3 接受駐留時間 s (預設 10)")
 
     r = sub.add_parser("record", help="錄製訊號")
     r.add_argument("--freq",   type=int, help="錄製頻率 Hz")
