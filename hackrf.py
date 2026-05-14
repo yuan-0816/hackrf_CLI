@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -748,11 +749,60 @@ def _menu_config():
             break
 
 
+def cmd_gps_jam(args=None):
+    header("屏蔽GPS信號")
+
+    GPS_L1_FREQ  = 1575420000
+    JAM_GAIN     = 47
+    NOISE_SIZE_B = 4 * 1024 * 1024
+
+    print(f"  發射寬頻噪聲以屏蔽 GPS L1 信號")
+    print(f"    頻率   : {GPS_L1_FREQ:,} Hz")
+    print(f"    TX 增益: {JAM_GAIN} dB")
+    print(f"    按 Ctrl+C 可隨時停止\n")
+
+    if args is None and not confirm("  確認執行?"):
+        return
+
+    noise_path = os.path.join(tempfile.gettempdir(), "hackrf_jam_noise.bin")
+    print("  [*] 生成噪聲資料...")
+    with open(noise_path, "wb") as f:
+        f.write(os.urandom(NOISE_SIZE_B))
+
+    ok = hackrf.start_tx(
+        filename=noise_path,
+        freq_hz=GPS_L1_FREQ,
+        sample_rate_hz=cfg.get("hackrf.sample_rate", 2600000),
+        tx_gain=JAM_GAIN,
+        repeat=True
+    )
+    if not ok:
+        print("  [Error] 發射啟動失敗")
+        try:
+            os.remove(noise_path)
+        except OSError:
+            pass
+        return
+
+    try:
+        while hackrf.is_running():
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("\n  [!] 使用者中斷")
+        hackrf.stop()
+    finally:
+        try:
+            os.remove(noise_path)
+        except OSError:
+            pass
+
+
 def _menu_gps():
     while True:
         header("GPS 模擬 / 誘騙")
         print("  1. 固定點位誘騙   (瞬間跳躍至目標座標)")
         print("  2. 牽引式誘騙     (EKF3 安全，緩慢牽引無人機移動)")
+        print("  3. 屏蔽GPS信號    (Freq=1575420000Hz, Gain=47 噪聲覆蓋)")
         print("  b. 返回")
         choice = prompt("\n  請選擇")
 
@@ -760,6 +810,8 @@ def _menu_gps():
             cmd_gps_static()
         elif choice == "2":
             cmd_gps_traction()
+        elif choice == "3":
+            cmd_gps_jam()
         elif is_back(choice):
             break
 
