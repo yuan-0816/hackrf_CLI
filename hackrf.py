@@ -290,7 +290,7 @@ def cmd_gps_static(args=None):
     output_bin = os.path.join(BIN_DIR, f"static_{lat:.5f}_{lon:.5f}.bin")
     os.makedirs(BIN_DIR, exist_ok=True)
     sim = _make_simulator()
-    ok = sim.generate_bin(
+    actual_bin = sim.generate_bin(
         output_bin=output_bin,
         static_mode=True,
         manual_coords=(lat, lon, alt),
@@ -298,15 +298,15 @@ def cmd_gps_static(args=None):
         drift_rate_mps=drift_rate_mps,
         drift_seed=drift_seed
     )
-    if not ok:
+    if not actual_bin:
         print("  [X] Bin 檔案生成失敗")
         return
 
     if args is None and not confirm("\n  是否立即發射?"):
-        print(f"  [V] Bin 已儲存: {output_bin}")
+        print(f"  [V] Bin 已儲存: {actual_bin}")
         return
 
-    _transmit(output_bin, repeat=repeat)
+    _transmit(actual_bin, repeat=repeat)
 
 
 def cmd_gps_traction(args=None):
