@@ -32,6 +32,7 @@ RECORD_DIR   = os.path.join(PROJECT_ROOT, "data", "recorded")
 CSV_DIR      = os.path.join(PROJECT_ROOT, "data", "fake_path")
 
 DEFAULT_DRIFT_RATE_MPS = 0.05
+BACK_COMMANDS = {"b", "back"}
 
 # ── 全域實例 ──────────────────────────────────────────────────────────────────
 
@@ -57,6 +58,32 @@ def prompt_float(text: str, default=None) -> float:
         except ValueError:
             print("  [!] 請輸入有效的數字")
 
+
+def is_back(value: str) -> bool:
+    return value.strip().lower() in BACK_COMMANDS
+
+
+def prompt_float_or_back(text: str, default=None) -> float | None:
+    while True:
+        raw = prompt(text, default)
+        if is_back(raw):
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            print("  [!] 請輸入有效的數字，或輸入 b 返回")
+
+
+def prompt_int_or_back(text: str, default=None) -> int | None:
+    while True:
+        raw = prompt(text, default)
+        if is_back(raw):
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            print("  [!] 請輸入有效的整數，或輸入 b 返回")
+
 def _parse_coords_line(line: str, default_alt: float) -> tuple[float, float, float] | None:
     parts = [p for p in re.split(r"[,\s]+", line.strip()) if p]
     if len(parts) not in (2, 3):
@@ -71,14 +98,20 @@ def _parse_coords_line(line: str, default_alt: float) -> tuple[float, float, flo
 
 def prompt_coords(default_alt: float) -> tuple[float, float, float] | None:
     while True:
-        line = prompt("  一次輸入 緯度 經度 高度 (例如: 25.03 121.56 100, 0=返回)", "")
+        line = prompt("  一次輸入 緯度 經度 高度 (例如: 25.03 121.56 100, b=返回)", "")
         if not line:
-            lat = prompt_float("  緯度 (lat)")
-            lon = prompt_float("  經度 (lon)")
-            alt = prompt_float("  高度 (m)", default_alt)
+            lat = prompt_float_or_back("  緯度 (lat, b=返回)")
+            if lat is None:
+                return None
+            lon = prompt_float_or_back("  經度 (lon, b=返回)")
+            if lon is None:
+                return None
+            alt = prompt_float_or_back("  高度 (m, b=返回)", default_alt)
+            if alt is None:
+                return None
             return lat, lon, alt
 
-        if line == "0":
+        if is_back(line):
             return None
 
         parsed = _parse_coords_line(line, default_alt)
@@ -106,8 +139,8 @@ def _select_preset(presets: dict, label: str = "Preset") -> tuple[str, dict] | N
     items = _sorted_presets(presets)
     _show_preset_table(presets)
 
-    raw = prompt(f"  選擇 {label} 編號 (1-{len(items)}, 0=返回)", "0")
-    if raw == "0":
+    raw = prompt(f"  選擇 {label} 編號 (1-{len(items)}, b=返回)", "b")
+    if is_back(raw):
         return None
 
     if raw.isdigit():
@@ -151,8 +184,8 @@ def pick_file(directory: str, extension: str, label: str) -> str | None:
         size_mb = os.path.getsize(f) / (1024 * 1024)
         print(f"    {i}. {os.path.basename(f)}  ({size_mb:.1f} MB)")
 
-    idx = prompt_int(f"  選擇編號 (1-{len(files)}, 0=返回)", 1)
-    if idx == 0:
+    idx = prompt_int_or_back(f"  選擇編號 (1-{len(files)}, b=返回)", 1)
+    if idx is None:
         return None
     if 1 <= idx <= len(files):
         return files[idx - 1]
@@ -226,8 +259,10 @@ def cmd_gps_static(args=None):
         if presets:
             _show_preset_table(presets)
             items = _sorted_presets(presets)
-            raw = prompt(f"\n  選擇 Preset 編號 (1-{len(items)}, 0=直接輸入座標)", "0")
-            if raw != "0" and raw.isdigit():
+            raw = prompt(f"\n  選擇 Preset 編號 (1-{len(items)}, m=手動輸入座標, b=返回)", "m").lower()
+            if is_back(raw):
+                return
+            if raw != "m" and raw.isdigit():
                 idx = int(raw)
                 if 1 <= idx <= len(items):
                     _, p = items[idx - 1]
@@ -245,7 +280,9 @@ def cmd_gps_static(args=None):
                 return
             lat, lon, alt = coords
 
-        repeat = prompt_int("  重複播放時間 (秒, 0=無限)", 0)
+        repeat = prompt_int_or_back("  重複播放時間 (秒, 0=無限, b=返回)", 0)
+        if repeat is None:
+            return
 
     print(f"\n  座標: {lat}, {lon}, alt={alt}m")
 
@@ -285,7 +322,7 @@ def cmd_gps_traction(args=None):
         duration = args.duration
     else:
         print("  此模式從無人機「真實 GPS 位置」出發，緩慢牽引移動。")
-        print(f"  EKF3 安全速度 <= 1.0 m/s，安全加速度 <= {EK3_SAFE_ACCEL} m/s²\n")
+        print(f"  EKF3 安全速度 <= 1.0 m/s，安全加速度 <= {EK3_SAFE_ACCEL} m/s^2\n")
 
         print("  [步驟 1/4] 輸入無人機當前真實座標")
         coords = prompt_coords(cfg.get("gps_sim.default_height", 50.0))
@@ -295,24 +332,32 @@ def cmd_gps_traction(args=None):
 
         print("\n  [步驟 2/4] 設定誘騙方向")
         print("    0° = 正北  |  90° = 正東  |  180° = 正南  |  270° = 正西")
-        heading = prompt_float("  方向 (度)", 0.0)
+        heading = prompt_float_or_back("  方向 (度, b=返回)", 0.0)
+        if heading is None:
+            return
 
         print("\n  [步驟 3/4] 設定速度")
         print(f"    建議 <= 1.0 m/s（保守）  最大 {EK3_VEL_GATE} m/s（EKF3 門檻）")
-        speed = prompt_float("  目標速度 (m/s)", 0.5)
+        speed = prompt_float_or_back("  目標速度 (m/s, b=返回)", 0.5)
+        if speed is None:
+            return
         if speed > EK3_VEL_GATE:
             print(f"  [Warning] {speed} m/s 超過 EKF3 速度門檻，可能觸發 Glitch 保護！")
 
         min_ramp = speed / EK3_SAFE_ACCEL
         print(f"\n  [步驟 4/4] 設定時長")
-        print(f"    加速時間建議 >= {min_ramp:.1f} s（加速度 <= {EK3_SAFE_ACCEL} m/s²）")
-        ramp = prompt_float("  加速時間 (s)", max(min_ramp, 20.0))
+        print(f"    加速時間建議 >= {min_ramp:.1f} s（加速度 <= {EK3_SAFE_ACCEL} m/s^2）")
+        ramp = prompt_float_or_back("  加速時間 (s, b=返回)", max(min_ramp, 20.0))
+        if ramp is None:
+            return
 
         accel = speed / ramp if ramp > 0 else float("inf")
         accel_warn = "  [Warning] 超過安全上限！" if accel > EK3_SAFE_ACCEL else "  [V]"
-        print(f"  加速度: {accel:.3f} m/s²  {accel_warn}")
+        print(f"  加速度: {accel:.3f} m/s^2  {accel_warn}")
 
-        duration = prompt_float("  誘騙總時長 (s)", 120.0)
+        duration = prompt_float_or_back("  誘騙總時長 (s, b=返回)", 120.0)
+        if duration is None:
+            return
 
     accel = speed / ramp if ramp > 0 else float("inf")
     cruise_t = max(duration - ramp, 0)
@@ -322,7 +367,7 @@ def cmd_gps_traction(args=None):
     print(f"  起始座標 : {lat:.6f}, {lon:.6f}, Alt={alt:.1f}m")
     print(f"  方向     : {heading}°（0=正北, 90=正東）")
     print(f"  目標速度 : {speed} m/s")
-    print(f"  加速時間 : {ramp} s  →  加速度 {accel:.3f} m/s²")
+    print(f"  加速時間 : {ramp} s  →  加速度 {accel:.3f} m/s^2")
     print(f"  總時長   : {duration} s  →  預計移動 ≈ {est_dist:.0f} m")
     print(f"  ─────────────────────────────────────────")
 
@@ -372,11 +417,11 @@ def cmd_record(args=None):
         freq   = args.freq
         output = args.output or _default_record_path()
     else:
-        freq   = prompt_int("  錄製頻率 (Hz, 0=返回)", cfg.get("hackrf.default_freq", 1575420000))
-        if freq == 0:
+        freq   = prompt_int_or_back("  錄製頻率 (Hz, b=返回)", cfg.get("hackrf.default_freq", 1575420000))
+        if freq is None:
             return
-        output = prompt("  輸出檔案路徑 (0=返回)", _default_record_path())
-        if output == "0":
+        output = prompt("  輸出檔案路徑 (b=返回)", _default_record_path())
+        if is_back(output):
             return
 
     os.makedirs(os.path.dirname(output), exist_ok=True)
@@ -415,14 +460,14 @@ def cmd_play(args=None):
         while True:
             all_bins = _list_files(BIN_DIR, ".bin") + _list_files(RECORD_DIR, ".bin")
             if not all_bins:
-                bin_file = prompt("  [!] 找不到 bin 檔案，請輸入完整路徑 (0=返回)")
-                if bin_file == "0":
+                bin_file = prompt("  [!] 找不到 bin 檔案，請輸入完整路徑 (b=返回)")
+                if is_back(bin_file):
                     return
                 break
 
             _show_bin_files(all_bins)
-            choice = prompt(f"  選擇編號播放 (1-{len(all_bins)}, d=刪除 bin, 0=返回)", "1").lower()
-            if choice == "0":
+            choice = prompt(f"  選擇編號播放 (1-{len(all_bins)}, d=刪除 bin, b=返回)", "1").lower()
+            if is_back(choice):
                 return
             if choice == "d":
                 _delete_bin_from_list(all_bins)
@@ -435,7 +480,9 @@ def cmd_play(args=None):
 
             print("  [!] 無效的選擇")
 
-    repeat = prompt_int("  重複播放時間 (秒, 0=無限)", 0)
+    repeat = prompt_int_or_back("  重複播放時間 (秒, 0=無限, b=返回)", 0)
+    if repeat is None:
+        return
 
     if not os.path.exists(bin_file):
         print(f"  [Error] 找不到檔案: {bin_file}")
@@ -453,8 +500,8 @@ def _show_bin_files(files: list[str]):
 
 
 def _delete_bin_from_list(files: list[str]):
-    idx = prompt_int(f"  選擇要刪除的編號 (1-{len(files)}, 0=返回)", 0)
-    if idx == 0:
+    idx = prompt_int_or_back(f"  選擇要刪除的編號 (1-{len(files)}, b=返回)", "b")
+    if idx is None:
         return
     if not 1 <= idx <= len(files):
         print("  [!] 無效的選擇")
@@ -586,7 +633,7 @@ def _menu_preset():
         print("  1. 列出所有 Preset")
         print("  2. 新增 Preset")
         print("  3. 刪除 Preset")
-        print("  0. 返回")
+        print("  b. 返回")
         choice = prompt("\n  請選擇")
 
         if choice == "1":
@@ -595,9 +642,15 @@ def _menu_preset():
             presets = cfg.preset_list()
             next_id = len(presets) + 1
             name = prompt("  Preset 名稱 (留空自動命名)", f"preset_{next_id}")
-            lat  = prompt_float("  緯度 (lat)")
-            lon  = prompt_float("  經度 (lon)")
-            alt  = prompt_float("  高度 (m)", 10.0)
+            lat  = prompt_float_or_back("  緯度 (lat, b=返回)")
+            if lat is None:
+                continue
+            lon  = prompt_float_or_back("  經度 (lon, b=返回)")
+            if lon is None:
+                continue
+            alt  = prompt_float_or_back("  高度 (m, b=返回)", 10.0)
+            if alt is None:
+                continue
             cfg.preset_add(name, lat, lon, alt)
             print(f"  [V] 已新增 Preset: {name}")
         elif choice == "3":
@@ -610,7 +663,7 @@ def _menu_preset():
                 print(f"  [V] 已刪除: {name}")
             else:
                 print(f"  [!] 找不到: {name}")
-        elif choice == "0":
+        elif is_back(choice):
             break
 
 
@@ -629,7 +682,7 @@ def _menu_config():
         print("  1. 顯示目前設定")
         print("  2. 修改參數")
         print("  3. 恢復預設值")
-        print("  0. 返回")
+        print("  b. 返回")
         choice = prompt("\n  請選擇")
 
         if choice == "1":
@@ -638,8 +691,8 @@ def _menu_config():
         elif choice == "2":
             header("可修改的參數")
             _show_config_params()
-            sel = prompt(f"\n  選擇編號 (1-{len(SETTABLE)}, 0=返回)")
-            if sel == "0":
+            sel = prompt(f"\n  選擇編號 (1-{len(SETTABLE)}, b=返回)")
+            if is_back(sel):
                 continue
             if sel in SETTABLE:
                 key, desc, cast = SETTABLE[sel]
@@ -657,7 +710,7 @@ def _menu_config():
                 cfg.reset()
                 print("  [V] 已恢復預設設定")
 
-        elif choice == "0":
+        elif is_back(choice):
             break
 
 
@@ -666,14 +719,14 @@ def _menu_gps():
         header("GPS 模擬 / 誘騙")
         print("  1. 固定點位誘騙   (瞬間跳躍至目標座標)")
         print("  2. 牽引式誘騙     (EKF3 安全，緩慢牽引無人機移動)")
-        print("  0. 返回")
+        print("  b. 返回")
         choice = prompt("\n  請選擇")
 
         if choice == "1":
             cmd_gps_static()
         elif choice == "2":
             cmd_gps_traction()
-        elif choice == "0":
+        elif is_back(choice):
             break
 
 
@@ -689,7 +742,7 @@ def run_interactive_menu():
         print("  5. 播放訊號")
         print("  6. Preset 管理")
         print("  7. 設定管理")
-        print("  0. 離開")
+        print("  q. 離開")
         choice = prompt("\n  請選擇")
 
         if   choice == "1": cmd_info()
@@ -699,7 +752,7 @@ def run_interactive_menu():
         elif choice == "5": cmd_play()
         elif choice == "6": _menu_preset()
         elif choice == "7": _menu_config()
-        elif choice == "0":
+        elif choice.lower() == "q":
             sys.exit(0)
 
 # ── 發射工具 ──────────────────────────────────────────────────────────────────
