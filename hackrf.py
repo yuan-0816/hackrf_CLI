@@ -412,26 +412,28 @@ def cmd_play(args=None):
         bin_file = args.file
         repeat   = args.repeat
     else:
-        all_bins = _list_files(BIN_DIR, ".bin") + _list_files(RECORD_DIR, ".bin")
-        if not all_bins:
-            bin_file = prompt("  [!] 找不到 bin 檔案，請輸入完整路徑 (0=返回)")
-            if bin_file == "0":
-                return
-        else:
-            print("\n  可用的 bin 檔案:")
-            for i, f in enumerate(all_bins, 1):
-                size_mb = os.path.getsize(f) / (1024 * 1024)
-                src     = "GPS" if BIN_DIR in f else "REC"
-                print(f"    {i}. [{src}] {os.path.basename(f)}  ({size_mb:.1f} MB)")
+        while True:
+            all_bins = _list_files(BIN_DIR, ".bin") + _list_files(RECORD_DIR, ".bin")
+            if not all_bins:
+                bin_file = prompt("  [!] 找不到 bin 檔案，請輸入完整路徑 (0=返回)")
+                if bin_file == "0":
+                    return
+                break
 
-            idx = prompt_int(f"  選擇編號 (1-{len(all_bins)}, 0=返回)", 1)
-            if idx == 0:
+            _show_bin_files(all_bins)
+            choice = prompt(f"  選擇編號播放 (1-{len(all_bins)}, d=刪除 bin, 0=返回)", "1").lower()
+            if choice == "0":
                 return
-            if 1 <= idx <= len(all_bins):
-                bin_file = all_bins[idx - 1]
-            else:
-                print("  [!] 無效的選擇")
-                return
+            if choice == "d":
+                _delete_bin_from_list(all_bins)
+                continue
+            if choice.isdigit():
+                idx = int(choice)
+                if 1 <= idx <= len(all_bins):
+                    bin_file = all_bins[idx - 1]
+                    break
+
+            print("  [!] 無效的選擇")
 
     repeat = prompt_int("  重複播放時間 (秒, 0=無限)", 0)
 
@@ -440,6 +442,35 @@ def cmd_play(args=None):
         return
 
     _transmit(bin_file, repeat=repeat)
+
+
+def _show_bin_files(files: list[str]):
+    print("\n  可用的 bin 檔案:")
+    for i, f in enumerate(files, 1):
+        size_mb = os.path.getsize(f) / (1024 * 1024)
+        src = "GPS" if os.path.commonpath([BIN_DIR, f]) == BIN_DIR else "REC"
+        print(f"    {i}. [{src}] {os.path.basename(f)}  ({size_mb:.1f} MB)")
+
+
+def _delete_bin_from_list(files: list[str]):
+    idx = prompt_int(f"  選擇要刪除的編號 (1-{len(files)}, 0=返回)", 0)
+    if idx == 0:
+        return
+    if not 1 <= idx <= len(files):
+        print("  [!] 無效的選擇")
+        return
+
+    target = files[idx - 1]
+    print(f"\n  將刪除: {target}")
+    if not confirm("  確定刪除此 bin 檔?"):
+        print("  [!] 已取消刪除")
+        return
+
+    try:
+        os.remove(target)
+        print(f"  [V] 已刪除: {os.path.basename(target)}")
+    except OSError as exc:
+        print(f"  [Error] 刪除失敗: {exc}")
 
 
 # ── Preset 指令 ───────────────────────────────────────────────────────────────
