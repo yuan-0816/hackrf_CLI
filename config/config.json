@@ -8,7 +8,9 @@
   },
   "gps_sim": {
     "default_speed_mps": 5.0,
-    "default_height": 100.0,
+    "default_height": 0.1,
+    "static_duration_s": 60,
+    "traction_duration_s": 120,
     "update_rate_hz": 10.0,
     "drift_heading_deg": 0.0,
     "drift_alt_jitter_m": 0.1
@@ -18,10 +20,10 @@
     "max_files": 5
   },
   "presets": {
-    "南投": {
-      "lat": 23.796517,
-      "lon": 120.982239,
-      "alt": 5.0
+    "中華資安": {
+      "lat": 25.0330718,
+      "lon": 121.5245442,
+      "alt": 0.5
     }
   }
 }

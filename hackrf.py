@@ -9,9 +9,12 @@ HackRF CLI
 """
 
 import argparse
+import datetime
+import math
 import unicodedata
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from utils.config_manager import ConfigManager
 from utils.tool import get_project_root
-from utils.get_latest_brdc import check_newst_brdc, fetch_latest_ephemeris
+from utils.get_latest_brdc import fetch_latest_ephemeris
 from hackrf_wrapper import HackRFCLI
 from fake_gps import FakeGPS
 
@@ -33,6 +36,9 @@ RECORD_DIR   = os.path.join(PROJECT_ROOT, "data", "recorded")
 CSV_DIR      = os.path.join(PROJECT_ROOT, "data", "fake_path")
 
 DEFAULT_DRIFT_RATE_MPS = 0.05
+DISK_RESERVE_BYTES = 256 * 1024 * 1024
+MIN_STATIC_DURATION_S = 1
+DEFAULT_STATIC_DURATION_S = 60
 BACK_COMMANDS = {"b", "back"}
 
 # ── 全域實例 ──────────────────────────────────────────────────────────────────
@@ -174,6 +180,27 @@ def _pad_display(text: object, width: int, align: str = "<") -> str:
 def confirm(text: str) -> bool:
     return prompt(f"{text} (y/n)", "n").lower() == "y"
 
+
+def prompt_gps_time_mode() -> str | None:
+    print("\n  GPS 時間模式")
+    print("    1. 星歷一致模式 (建議，保留 TOE/TOC，使用 -t)")
+    print("    2. 當前時間模式 (將 TOE/TOC 平移至現在，使用 -T now)")
+    while True:
+        selected = prompt("  請選擇時間模式 (1-2, b=返回)", "1")
+        if is_back(selected):
+            return None
+        if selected == "1":
+            return "ephemeris"
+        if selected == "2":
+            print(
+                "  [Warning] 此模式產生合成的當前時間星座，"
+                "不代表目前真實衛星軌道。"
+            )
+            if confirm("  確認使用 -T now?"):
+                return "shifted-now"
+            continue
+        print("  [!] 無效的選擇")
+
 def pick_file(directory: str, extension: str, label: str) -> str | None:
     files = _list_files(directory, extension)
     if not files:
@@ -217,13 +244,20 @@ def cmd_info(_args=None):
 
 def cmd_ephemeris(_args=None):
     header("更新星歷檔案")
-    if check_newst_brdc():
-        print("  [V] 已是最新星歷，無需更新")
-        return
-    print("  [*] 正在下載最新星歷...")
-    path = fetch_latest_ephemeris()
+    print("  [*] 正在重新取得今日最新星歷...")
+    path = fetch_latest_ephemeris(force=True)
     if path:
         print(f"  [V] 星歷更新成功: {path}")
+        bounds = FakeGPS._get_ephemeris_time_bounds(path)
+        if bounds:
+            _, latest = bounds
+            now = datetime.datetime.now(datetime.timezone.utc)
+            lag_seconds = max((now - latest).total_seconds(), 0)
+            print(
+                "  [*] 星歷最晚 epoch (UTC): "
+                f"{latest.strftime('%Y/%m/%d,%H:%M:%S')}"
+            )
+            print(f"  [*] 與目前 UTC 相差: {lag_seconds:.0f} 秒")
     else:
         print("  [X] 星歷更新失敗")
 
@@ -232,11 +266,12 @@ def cmd_gps_static(args=None):
     header("GPS 靜態點位模擬")
 
     lat = lon = alt = None
-    repeat = 0
+    duration = DEFAULT_STATIC_DURATION_S
 
     drift_enabled = False
     drift_rate_mps = DEFAULT_DRIFT_RATE_MPS
     drift_seed = None
+    time_mode = "ephemeris"
 
     if args and (args.lat or args.preset):
         if args.preset:
@@ -250,7 +285,15 @@ def cmd_gps_static(args=None):
                 print("  [Error] 請提供 --lat 和 --lon，或使用 --preset")
                 return
             lat, lon, alt = args.lat, args.lon, args.alt
-        repeat = args.repeat
+        if args.duration is not None and args.repeat is not None:
+            print("  [Error] --duration 與舊版 --repeat 不可同時使用")
+            return
+        if args.repeat is not None:
+            print("  [Warning] --repeat 已棄用，本次將作為 --duration 處理")
+            duration = args.repeat
+        elif args.duration is not None:
+            duration = args.duration
+        time_mode = args.time_mode
         if args.drift or args.drift_rate is not None or args.drift_seed is not None:
             drift_enabled = True
             drift_rate_mps = args.drift_rate if args.drift_rate is not None else DEFAULT_DRIFT_RATE_MPS
@@ -281,14 +324,43 @@ def cmd_gps_static(args=None):
                 return
             lat, lon, alt = coords
 
-        repeat = prompt_int_or_back("  重複播放時間 (秒, 0=無限, b=返回)", 0)
-        if repeat is None:
+        while True:
+            duration = prompt_int_or_back(
+                "  GPS 訊號時長 (秒, 最少 1 秒, b=返回)",
+                DEFAULT_STATIC_DURATION_S,
+            )
+            if duration is None:
+                return
+            if duration >= MIN_STATIC_DURATION_S:
+                break
+            print("  [!] 時長必須至少為 1 秒")
+
+        time_mode = prompt_gps_time_mode()
+        if time_mode is None:
             return
 
-    print(f"\n  座標: {lat}, {lon}, alt={alt}m")
+    if duration < MIN_STATIC_DURATION_S:
+        print("  [Error] 時長必須至少為 1 秒")
+        return
 
-    output_bin = os.path.join(BIN_DIR, f"static_{lat:.5f}_{lon:.5f}.bin")
+    sample_rate = cfg.get("hackrf.sample_rate", 2600000)
+    estimated_size = sample_rate * 2 * duration
     os.makedirs(BIN_DIR, exist_ok=True)
+    free_space = shutil.disk_usage(BIN_DIR).free
+    print(f"\n  座標: {lat}, {lon}, alt={alt}m")
+    print(f"  訊號時長: {duration} 秒（單次播放）")
+    print(f"  預估檔案大小: {estimated_size / (1024 * 1024):.1f} MB")
+    if estimated_size > max(0, free_space - DISK_RESERVE_BYTES):
+        print(
+            "  [Error] 磁碟空間不足："
+            f"可用 {free_space / (1024 * 1024):.1f} MB"
+        )
+        return
+
+    output_bin = os.path.join(
+        BIN_DIR,
+        f"static_{lat:.5f}_{lon:.5f}_{duration}s.bin",
+    )
     sim = _make_simulator()
     actual_bin = sim.generate_bin(
         output_bin=output_bin,
@@ -296,7 +368,9 @@ def cmd_gps_static(args=None):
         manual_coords=(lat, lon, alt),
         drift_enabled=drift_enabled,
         drift_rate_mps=drift_rate_mps,
-        drift_seed=drift_seed
+        drift_seed=drift_seed,
+        time_mode=time_mode,
+        drift_duration_s=duration,
     )
     if not actual_bin:
         print("  [X] Bin 檔案生成失敗")
@@ -306,14 +380,11 @@ def cmd_gps_static(args=None):
         print(f"  [V] Bin 已儲存: {actual_bin}")
         return
 
-    _transmit(actual_bin, repeat=repeat)
+    _transmit(actual_bin, repeat=0, loop=False)
 
 
 def cmd_gps_traction(args=None):
-    header("牽引式 GPS 誘騙 (EKF3 安全)")
-
-    EK3_VEL_GATE   = 2.5
-    EK3_SAFE_ACCEL = 0.75
+    header("牽引式 GPS 實驗軌跡")
 
     if args and args.lat is not None:
         lat, lon, alt = args.lat, args.lon, args.alt
@@ -322,9 +393,11 @@ def cmd_gps_traction(args=None):
         ramp     = args.ramp
         duration = args.duration
         hold     = args.hold
+        final_hold = args.final_hold
+        time_mode = args.time_mode
     else:
-        print("  此模式從無人機「真實 GPS 位置」出發，緩慢牽引移動。")
-        print(f"  EKF3 安全速度 <= 1.0 m/s，安全加速度 <= {EK3_SAFE_ACCEL} m/s^2\n")
+        print("  此模式從載具當前 GPS 位置出發，產生緩慢移動軌跡。")
+        print("  [Warning] 軌跡參數不保證 EKF3 接受，需以 XKF3/XKF4 log 驗證。\n")
 
         lat = lon = alt = None
         heading = 0.0
@@ -332,6 +405,8 @@ def cmd_gps_traction(args=None):
         ramp = 20.0
         duration = 120.0
         hold = 10.0
+        final_hold = 5.0
+        time_mode = "ephemeris"
         step = 1
 
         while True:
@@ -356,52 +431,70 @@ def cmd_gps_traction(args=None):
 
             elif step == 3:
                 print("\n  [步驟 3/4] 設定速度")
-                print(f"    建議 <= 1.0 m/s（保守）  最大 {EK3_VEL_GATE} m/s（EKF3 門檻）")
+                print("    建議從低速開始；實際接受門檻取決於 EKF covariance 與 GPS 精度。")
                 val = prompt_float_or_back("  目標速度 (m/s, b=返回)", speed)
                 if val is None:
                     step = 2
                 else:
                     speed = val
-                    if speed > EK3_VEL_GATE:
-                        print(f"  [Warning] {speed} m/s 超過 EKF3 速度門檻，可能觸發 Glitch 保護！")
                     step = 4
 
             elif step == 4:
-                min_ramp = 1.5 * speed / EK3_SAFE_ACCEL
                 print(f"\n  [步驟 4/4] 設定時長")
-                print(f"    加速時間建議 >= {min_ramp:.1f} s（S-curve 峰值加速度 <= {EK3_SAFE_ACCEL} m/s^2）")
-                val = prompt_float_or_back("  加速時間 (s, b=返回)", max(ramp, min_ramp))
+                val = prompt_float_or_back("  加速與減速時間 (各自秒數, b=返回)", ramp)
                 if val is None:
                     step = 3
                 else:
                     ramp = val
-                    peak_accel = 1.5 * speed / ramp if ramp > 0 else float("inf")
-                    accel_warn = "  [Warning] 超過安全上限！" if peak_accel > EK3_SAFE_ACCEL else "  [V]"
-                    print(f"  S-curve 峰值加速度: {peak_accel:.3f} m/s^2  {accel_warn}")
-
                     val = prompt_float_or_back("  誘騙總時長 (s, b=返回)", duration)
                     if val is None:
                         step = 4
                     else:
                         duration = val
-                        val = prompt_float_or_back("  EKF3 接受駐留時間 (s, b=返回)", hold)
+                        val = prompt_float_or_back("  起始靜止時間 (s, b=返回)", hold)
                         if val is None:
                             step = 4
                         else:
                             hold = val
-                            break
+                            val = prompt_float_or_back("  終點靜止時間 (s, b=返回)", final_hold)
+                            if val is None:
+                                step = 4
+                            else:
+                                final_hold = val
+                                time_mode = prompt_gps_time_mode()
+                                if time_mode is None:
+                                    return
+                                break
+
+    numeric_values = (lat, lon, alt, heading, speed, ramp, duration, hold, final_hold)
+    if not all(math.isfinite(value) for value in numeric_values):
+        print("  [Error] 軌跡參數必須是有限數值")
+        return
+    if not -90 <= lat <= 90 or not -180 <= lon <= 180:
+        print("  [Error] 緯度必須介於 -90~90，經度必須介於 -180~180")
+        return
+    if speed <= 0 or ramp <= 0:
+        print("  [Error] 速度與加減速時間必須大於 0")
+        return
+    if duration <= 0:
+        print("  [Error] 總時長必須大於 0 秒")
+        return
+    active_duration = duration - hold - final_hold
+    if hold < 0 or final_hold < 0 or active_duration < 2 * ramp:
+        print("  [Error] 總時長必須足以容納起始/終點靜止及完整加減速")
+        return
+    heading %= 360.0
 
     peak_accel = 1.5 * speed / ramp if ramp > 0 else float("inf")
-    move_t = max(duration - hold, 0)
-    cruise_t = max(move_t - ramp, 0)
-    est_dist = 0.5 * speed * ramp + speed * cruise_t
+    cruise_t = active_duration - 2 * ramp
+    est_dist = speed * ramp + speed * cruise_t
 
     print(f"\n  ── 執行摘要 ─────────────────────────────")
     print(f"  起始座標 : {lat:.6f}, {lon:.6f}, Alt={alt:.1f}m")
     print(f"  方向     : {heading}°（0=正北, 90=正東）")
     print(f"  目標速度 : {speed} m/s")
-    print(f"  加速時間 : {ramp} s  →  S-curve 峰值加速度 {peak_accel:.3f} m/s^2")
-    print(f"  駐留時間 : {hold} s  (EKF3 接受偽造 GPS 源)")
+    print(f"  加/減速   : 各 {ramp} s  →  S-curve 峰值加速度 {peak_accel:.3f} m/s^2")
+    print(f"  靜止時間 : 起始 {hold} s / 終點 {final_hold} s")
     print(f"  總時長   : {duration} s  →  預計移動 ≈ {est_dist:.1f} m")
     print(f"  ─────────────────────────────────────────")
 
@@ -414,6 +507,17 @@ def cmd_gps_traction(args=None):
     os.makedirs(CSV_DIR, exist_ok=True)
     os.makedirs(BIN_DIR, exist_ok=True)
 
+    sample_rate = cfg.get("hackrf.sample_rate", 2600000)
+    estimated_size = sample_rate * 2 * duration
+    free_space = shutil.disk_usage(BIN_DIR).free
+    if estimated_size > max(0, free_space - DISK_RESERVE_BYTES):
+        print(
+            "  [Error] 磁碟空間不足："
+            f"預估需要 {estimated_size / (1024 * 1024):.1f} MB，"
+            f"可用 {free_space / (1024 * 1024):.1f} MB"
+        )
+        return
+
     sim = _make_simulator()
 
     ok = sim._generate_traction_csv(
@@ -424,6 +528,7 @@ def cmd_gps_traction(args=None):
         ramp_duration_s=ramp,
         total_duration_s=duration,
         hold_duration_s=hold,
+        final_hold_duration_s=final_hold,
     )
     if not ok:
         print("  [X] CSV 生成失敗")
@@ -433,6 +538,7 @@ def cmd_gps_traction(args=None):
         output_bin=output_bin,
         static_mode=False,
         csv_file=csv_file,
+        time_mode=time_mode,
     )
     if not output_bin:
         print("  [X] Bin 生成失敗")
@@ -442,7 +548,7 @@ def cmd_gps_traction(args=None):
         print(f"  [V] Bin 已儲存: {output_bin}")
         return
 
-    _transmit(output_bin, repeat=0)
+    _transmit(output_bin, repeat=0, loop=False)
 
 
 def cmd_record(args=None):
@@ -565,13 +671,35 @@ def cmd_preset(args=None):
         elif action == "add":
             cfg.preset_add(args.name, args.lat, args.lon, args.alt)
             print(f"  [V] 已新增 Preset: {args.name}")
+        elif action == "edit":
+            if all(
+                value is None
+                for value in (args.new_name, args.lat, args.lon, args.alt)
+            ):
+                print("  [!] 請至少提供一個要修改的欄位")
+                return
+            try:
+                updated = cfg.preset_update(
+                    args.name,
+                    new_name=args.new_name,
+                    lat=args.lat,
+                    lon=args.lon,
+                    alt=args.alt,
+                )
+            except ValueError as exc:
+                print(f"  [Error] {exc}")
+                return
+            if updated:
+                print(f"  [V] 已更新 Preset: {args.new_name or args.name}")
+            else:
+                print(f"  [!] 找不到 Preset: {args.name}")
         elif action == "delete":
             if cfg.preset_delete(args.name):
                 print(f"  [V] 已刪除 Preset: {args.name}")
             else:
                 print(f"  [!] 找不到 Preset: {args.name}")
         else:
-            print("  [!] 請指定子指令: list / add / delete")
+            print("  [!] 請指定子指令: list / add / edit / delete")
     else:
         _menu_preset()
 
@@ -667,7 +795,8 @@ def _menu_preset():
         header("Preset 管理")
         print("  1. 列出所有 Preset")
         print("  2. 新增 Preset")
-        print("  3. 刪除 Preset")
+        print("  3. 編輯 Preset")
+        print("  4. 刪除 Preset")
         print("  b. 返回")
         choice = prompt("\n  請選擇")
 
@@ -689,6 +818,35 @@ def _menu_preset():
             cfg.preset_add(name, lat, lon, alt)
             print(f"  [V] 已新增 Preset: {name}")
         elif choice == "3":
+            presets = cfg.preset_list()
+            selected = _select_preset(presets, "要編輯的 Preset")
+            if not selected:
+                continue
+            name, current = selected
+
+            new_name = prompt("  Preset 名稱", name)
+            lat = prompt_float_or_back("  緯度 (lat, b=返回)", current["lat"])
+            if lat is None:
+                continue
+            lon = prompt_float_or_back("  經度 (lon, b=返回)", current["lon"])
+            if lon is None:
+                continue
+            alt = prompt_float_or_back("  高度 (m, b=返回)", current["alt"])
+            if alt is None:
+                continue
+
+            try:
+                cfg.preset_update(
+                    name,
+                    new_name=new_name,
+                    lat=lat,
+                    lon=lon,
+                    alt=alt,
+                )
+                print(f"  [V] 已更新 Preset: {new_name}")
+            except ValueError as exc:
+                print(f"  [Error] {exc}")
+        elif choice == "4":
             presets = cfg.preset_list()
             selected = _select_preset(presets, "要刪除的 Preset")
             if not selected:
@@ -801,7 +959,7 @@ def _menu_gps():
     while True:
         header("GPS 模擬 / 誘騙")
         print("  1. 固定點位誘騙   (瞬間跳躍至目標座標)")
-        print("  2. 牽引式誘騙     (EKF3 安全，緩慢牽引無人機移動)")
+        print("  2. 牽引式實驗軌跡 (緩慢移動，需以 EKF log 驗證)")
         print("  3. 屏蔽GPS信號    (Freq=1575420000Hz, Gain=47 噪聲覆蓋)")
         print("  b. 返回")
         choice = prompt("\n  請選擇")
@@ -843,7 +1001,7 @@ def run_interactive_menu():
 
 # ── 發射工具 ──────────────────────────────────────────────────────────────────
 
-def _transmit(bin_file: str, repeat: int = 0):
+def _transmit(bin_file: str, repeat: int = 0, loop: bool = True):
     freq        = cfg.get("hackrf.default_freq", 1575420000)
     sample_rate = cfg.get("hackrf.sample_rate", 2600000)
     tx_gain     = cfg.get("hackrf.tx_gain", 47)
@@ -852,7 +1010,13 @@ def _transmit(bin_file: str, repeat: int = 0):
     print(f"    頻率   : {freq:,} Hz")
     print(f"    採樣率 : {sample_rate:,} Hz")
     print(f"    TX 增益: {tx_gain} dB")
-    print(f"    模式   : {'無限迴圈' if not repeat else f'{repeat} 秒後停止'}")
+    if not loop:
+        mode = "單次播放"
+    elif repeat:
+        mode = f"{repeat} 秒後停止"
+    else:
+        mode = "無限迴圈"
+    print(f"    模式   : {mode}")
     print("    按 Ctrl+C 可隨時停止\n")
 
     ok = hackrf.start_tx(
@@ -860,7 +1024,7 @@ def _transmit(bin_file: str, repeat: int = 0):
         freq_hz=freq,
         sample_rate_hz=sample_rate,
         tx_gain=tx_gain,
-        repeat=True
+        repeat=loop
     )
     if not ok:
         print("  [Error] 發射啟動失敗")
@@ -905,8 +1069,8 @@ def build_parser() -> argparse.ArgumentParser:
   python hackrf.py ephemeris                                                # 更新星歷
 
   # GPS 誘騙
-  python hackrf.py gps static --lat 25.03 --lon 121.56                     # 固定點位誘騙 (無限)
-  python hackrf.py gps static --preset 台北101 --repeat 60                  # 固定點位 (60秒)
+  python hackrf.py gps static --lat 25.03 --lon 121.56 --duration 60       # 固定點位 (60秒單次播放)
+  python hackrf.py gps static --preset 台北101 --duration 300              # 固定點位 (5分鐘上限)
   python hackrf.py gps traction --lat 25.03 --lon 121.56 --heading 90      # 牽引式誘騙 (往正東)
   python hackrf.py gps traction --lat 25.03 --lon 121.56 --speed 0.3 --ramp 30 --duration 180
 
@@ -934,20 +1098,45 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--lon",    type=float, help="經度")
     s.add_argument("--alt",    type=float, default=10.0, help="高度 m (預設 10)")
     s.add_argument("--preset", type=str,   help="使用已儲存的 Preset 名稱")
-    s.add_argument("--repeat", type=int,   default=0, help="播放秒數 (0=無限, 預設 0)")
+    s.add_argument(
+        "--duration",
+        type=int,
+        default=None,
+        help=f"GPS 訊號時長秒數 (最少 1 秒, 預設 {DEFAULT_STATIC_DURATION_S})",
+    )
+    s.add_argument("--repeat", type=int, default=None, help=argparse.SUPPRESS)
     s.add_argument("--drift",  action="store_true", help="啟用緩慢漂移 (random walk)")
     s.add_argument("--drift-rate", type=float, default=None, help="漂移速度 m/s (預設 0.05)")
     s.add_argument("--drift-seed", type=int,   default=None, help="漂移亂數種子 (選用)")
+    s.add_argument(
+        "--time-mode",
+        choices=("ephemeris", "shifted-now"),
+        default="ephemeris",
+        help=(
+            "GPS 時間模式: ephemeris=保留星歷時間; "
+            "shifted-now=使用 -T now 平移 TOE/TOC"
+        ),
+    )
 
-    t = gps_sub.add_parser("traction", help="牽引式誘騙 (EKF3 安全，緩慢移動)")
+    t = gps_sub.add_parser("traction", help="牽引式 GPS 實驗軌跡（緩慢移動）")
     t.add_argument("--lat",      type=float, required=True, help="無人機當前緯度")
     t.add_argument("--lon",      type=float, required=True, help="無人機當前經度")
     t.add_argument("--alt",      type=float, default=50.0,  help="無人機當前高度 m (預設 50)")
     t.add_argument("--heading",  type=float, default=0.0,   help="誘騙方向 度 (0=正北, 90=正東, 預設 0)")
-    t.add_argument("--speed",    type=float, default=0.5,   help="目標速度 m/s (建議 <= 1.0, 預設 0.5)")
-    t.add_argument("--ramp",     type=float, default=20.0,  help="加速時間 s (預設 20)")
+    t.add_argument("--speed",    type=float, default=0.5,   help="目標速度 m/s (預設 0.5)")
+    t.add_argument("--ramp",     type=float, default=20.0,  help="加速與減速時間 s (各自，預設 20)")
     t.add_argument("--duration", type=float, default=120.0, help="總時長 s (預設 120)")
-    t.add_argument("--hold",     type=float, default=10.0,  help="EKF3 接受駐留時間 s (預設 10)")
+    t.add_argument("--hold",     type=float, default=10.0,  help="起始靜止時間 s (預設 10)")
+    t.add_argument("--final-hold", type=float, default=5.0, help="終點靜止時間 s (預設 5)")
+    t.add_argument(
+        "--time-mode",
+        choices=("ephemeris", "shifted-now"),
+        default="ephemeris",
+        help=(
+            "GPS 時間模式: ephemeris=保留星歷時間; "
+            "shifted-now=使用 -T now 平移 TOE/TOC"
+        ),
+    )
 
     r = sub.add_parser("record", help="錄製訊號")
     r.add_argument("--freq",   type=int, help="錄製頻率 Hz")
@@ -966,6 +1155,13 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_argument("--lat",  type=float, required=True)
     pa.add_argument("--lon",  type=float, required=True)
     pa.add_argument("--alt",  type=float, default=10.0)
+
+    pe = preset_sub.add_parser("edit", help="編輯 Preset")
+    pe.add_argument("--name", required=True, help="現有 Preset 名稱")
+    pe.add_argument("--new-name", help="新的 Preset 名稱")
+    pe.add_argument("--lat", type=float, help="新緯度")
+    pe.add_argument("--lon", type=float, help="新經度")
+    pe.add_argument("--alt", type=float, help="新高度")
 
     pd = preset_sub.add_parser("delete", help="刪除 Preset")
     pd.add_argument("--name", required=True)

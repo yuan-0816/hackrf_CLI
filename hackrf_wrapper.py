@@ -1,6 +1,6 @@
-import subprocess
 import os
 import shutil
+import subprocess
 
 class HackRFCLI:
     def __init__(self):
@@ -36,9 +36,8 @@ class HackRFCLI:
             # 使用 Popen 啟動 (非阻塞)
             self.process = subprocess.Popen(
                 cmd_args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             return True
         except FileNotFoundError as e:

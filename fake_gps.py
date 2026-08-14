@@ -1,4 +1,5 @@
 import xml.etree.ElementTree as ET
+import datetime
 import math
 import os
 import sys
@@ -7,11 +8,14 @@ import time
 import signal
 import random
 
-from utils.get_latest_brdc import fetch_latest_ephemeris, check_newst_brdc
+from utils.get_latest_brdc import fetch_latest_ephemeris
 from utils.tool import *
 from hackrf_wrapper import HackRFCLI
 
 class FakeGPS:
+    MOTION_RATE_HZ = 10.0
+    MAX_SIGNAL_DURATION_S = 86400.0
+
     def __init__(
         self,
         target_speed_mps=10.0,
@@ -33,6 +37,12 @@ class FakeGPS:
         self.default_height = default_height
         self.gps_sim_exe_path = self._resolve_executable_path(gps_sim_exe_path)
 
+        if not math.isclose(self.update_rate_hz, self.MOTION_RATE_HZ):
+            raise ValueError(
+                "gps-sdr-sim 動態軌跡固定以 10 Hz 讀取，"
+                f"不支援 update_rate_hz={self.update_rate_hz}"
+            )
+
         self.hackrf = HackRFCLI()
 
     def _resolve_executable_path(self, exe_path: str) -> str:
@@ -45,6 +55,67 @@ class FakeGPS:
                 return exe_path_with_ext
 
         return exe_path
+
+    @staticmethod
+    def _get_ephemeris_time_bounds(ephemeris_file_path: str):
+        """讀取 RINEX 2/3 GPS navigation 檔中的最早與最晚 epoch。"""
+        epochs = []
+        in_header = True
+        try:
+            with open(ephemeris_file_path, "r", encoding="ascii", errors="ignore") as file:
+                for line in file:
+                    if in_header:
+                        if "END OF HEADER" in line:
+                            in_header = False
+                        continue
+
+                    fields = line.split()
+                    try:
+                        if line[:3].strip().isdigit() and len(fields) >= 7:
+                            year = int(fields[1])
+                            year += 2000 if year < 80 else 1900
+                            values = [year, *map(int, fields[2:6])]
+                            second = float(fields[6])
+                        elif (
+                            len(line) >= 3
+                            and line[0].isalpha()
+                            and line[1:3].isdigit()
+                            and len(fields) >= 7
+                        ):
+                            values = list(map(int, fields[1:6]))
+                            second = float(fields[6])
+                        else:
+                            continue
+
+                        epoch = datetime.datetime(
+                            *values,
+                            int(second),
+                            tzinfo=datetime.timezone.utc,
+                        )
+                        epochs.append(epoch)
+                    except (TypeError, ValueError):
+                        continue
+        except OSError:
+            return None
+
+        if not epochs:
+            return None
+        return min(epochs), max(epochs)
+
+    def _nearest_ephemeris_time_to_now(self, ephemeris_file_path: str) -> str:
+        now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+        bounds = self._get_ephemeris_time_bounds(ephemeris_file_path)
+        selected = now
+        if bounds:
+            earliest, latest = bounds
+            selected = min(max(now, earliest), latest)
+            if selected != now:
+                difference = abs((now - selected).total_seconds())
+                print(
+                    "[Warning] 目前 UTC 不在星曆涵蓋範圍內，"
+                    f"改用最接近的可用時間（相差 {difference:.0f} 秒）"
+                )
+        return selected.strftime("%Y/%m/%d,%H:%M:%S")
 
     def _get_dist_meters(self, lat1, lon1, lat2, lon2) -> float:
         """計算兩點間的距離 (Haversine formula)"""
@@ -118,6 +189,10 @@ class FakeGPS:
         alt_jitter_m=0.0
     ) -> bool:
         """生成緩慢漂移的 CSV 軌跡"""
+        if duration_s < 0 or duration_s > self.MAX_SIGNAL_DURATION_S:
+            print("[Error] 動態軌跡時長必須介於 0 與 86400 秒")
+            return False
+
         dt = 1.0 / self.update_rate_hz
         steps = int(duration_s / dt)
         rng = random.Random(seed)
@@ -225,19 +300,45 @@ class FakeGPS:
         ramp_duration_s: float,
         total_duration_s: float,
         hold_duration_s: float = 10.0,
+        final_hold_duration_s: float = 5.0,
     ) -> bool:
         """
-        生成 EKF3 信任範圍內的牽引誘騙 CSV 軌跡。
+        產生起始靜止、S-curve 加速、巡航、S-curve 減速與終點靜止軌跡。
 
-        兩階段設計：
-          Phase 1 (hold): 在起始位置靜止 hold_duration_s 秒，讓 EKF3 完全接受
-                          偽造 GPS 源後再開始移動。
-          Phase 2 (move): 使用 S-curve 速度剖面加速，消除線性加速在 t=0 的
-                          瞬間 jerk，避免 IMU 與 GPS 創新量不一致。
-
-        S-curve 峰值加速度 = 1.5 * target_speed / ramp_duration，
-        確認呼叫端已驗證此值低於 EK3_GLITCH_ACCEL * SAFE_ACCEL_RATIO。
+        軌跡只控制模擬位置與速度的連續性，不保證任何特定 EKF 會接受量測。
         """
+        values = (
+            start_lat,
+            start_lon,
+            start_alt,
+            heading_deg,
+            target_speed_mps,
+            ramp_duration_s,
+            total_duration_s,
+            hold_duration_s,
+            final_hold_duration_s,
+        )
+        if not all(math.isfinite(value) for value in values):
+            print("[Error] 軌跡參數必須是有限數值")
+            return False
+        if not -90 <= start_lat <= 90 or not -180 <= start_lon <= 180:
+            print("[Error] 軌跡起點經緯度超出有效範圍")
+            return False
+        if target_speed_mps <= 0 or ramp_duration_s <= 0:
+            print("[Error] 目標速度與加減速時間必須大於 0")
+            return False
+        if total_duration_s <= 0 or total_duration_s > self.MAX_SIGNAL_DURATION_S:
+            print("[Error] 動態軌跡時長必須介於 0 與 86400 秒")
+            return False
+        active_duration_s = total_duration_s - hold_duration_s - final_hold_duration_s
+        if (
+            hold_duration_s < 0
+            or final_hold_duration_s < 0
+            or active_duration_s < 2 * ramp_duration_s
+        ):
+            print("[Error] 總時長不足以容納靜止與完整加減速階段")
+            return False
+
         dt = 1.0 / self.update_rate_hz
         heading_rad = math.radians(heading_deg)
         lat, lon, alt = start_lat, start_lon, start_alt
@@ -250,36 +351,62 @@ class FakeGPS:
                 f"建議降低 update_rate_hz（目前 {self.update_rate_hz} Hz）或提高速度"
             )
 
-        move_duration_s = max(0.0, total_duration_s - hold_duration_s)
         hold_steps = int(hold_duration_s / dt)
-        move_steps = int(move_duration_s / dt)
+        final_hold_steps = int(final_hold_duration_s / dt)
+        ramp_steps = int(ramp_duration_s / dt)
+        active_steps = int(active_duration_s / dt)
+        cruise_steps = active_steps - 2 * ramp_steps
+
+        def write_motion_step(file, speed):
+            nonlocal lat, lon, current_time
+            distance = speed * dt
+            d_north = math.cos(heading_rad) * distance
+            d_east = math.sin(heading_rad) * distance
+            lat, lon = self._offset_lat_lon_m(lat, lon, d_north, d_east)
+            current_time += dt
+            file.write(f"{current_time:.1f},{lat:.9f},{lon:.9f},{alt:.1f}\n")
 
         try:
             with open(csv_file, "w") as f:
                 current_time = 0.0
                 f.write(f"{current_time:.1f},{lat:.9f},{lon:.9f},{alt:.1f}\n")
 
-                # Phase 1: 靜止駐留，讓 EKF3 信任偽造 GPS 源
+                # Phase 1: 起始靜止
                 for _ in range(hold_steps):
                     current_time += dt
                     f.write(f"{current_time:.1f},{lat:.9f},{lon:.9f},{alt:.1f}\n")
 
-                # Phase 2: S-curve 加速移動
-                elapsed_move = 0.0
-                for _ in range(move_steps):
-                    speed = self._smoothstep_velocity(elapsed_move, ramp_duration_s, target_speed_mps)
-                    distance = speed * dt
-                    d_north = math.cos(heading_rad) * distance
-                    d_east = math.sin(heading_rad) * distance
-                    lat, lon = self._offset_lat_lon_m(lat, lon, d_north, d_east)
-                    elapsed_move += dt
+                # Phase 2: S-curve 加速
+                for step in range(1, ramp_steps + 1):
+                    elapsed = step * dt
+                    speed = self._smoothstep_velocity(
+                        elapsed, ramp_duration_s, target_speed_mps
+                    )
+                    write_motion_step(f, speed)
+
+                # Phase 3: 等速巡航
+                for _ in range(cruise_steps):
+                    write_motion_step(f, target_speed_mps)
+
+                # Phase 4: S-curve 減速
+                for step in range(1, ramp_steps + 1):
+                    elapsed = step * dt
+                    speed = target_speed_mps - self._smoothstep_velocity(
+                        elapsed, ramp_duration_s, target_speed_mps
+                    )
+                    write_motion_step(f, speed)
+
+                # Phase 5: 終點靜止
+                for _ in range(final_hold_steps):
                     current_time += dt
                     f.write(f"{current_time:.1f},{lat:.9f},{lon:.9f},{alt:.1f}\n")
 
             self.total_duration = current_time
             print(
                 f"[V] 牽引 CSV 生成完成: {csv_file}"
-                f" (駐留 {hold_duration_s:.0f}s + 移動 {move_duration_s:.0f}s"
+                f" (起始靜止 {hold_duration_s:.0f}s + 加速 {ramp_duration_s:.0f}s"
+                f" + 巡航 {cruise_steps * dt:.0f}s + 減速 {ramp_duration_s:.0f}s"
+                f" + 終點靜止 {final_hold_duration_s:.0f}s"
                 f" = 總計 {self.total_duration:.1f}s)"
             )
             return True
@@ -342,6 +469,7 @@ class FakeGPS:
         ramp_duration_s: float = 20.0,
         total_duration_s: float = 120.0,
         hold_duration_s: float = 10.0,
+        final_hold_duration_s: float = 5.0,
         output_bin: str = None,
         ephemeris_file: str = None,
         freq: int = 1575420000,
@@ -349,25 +477,11 @@ class FakeGPS:
         tx_gain: int = 47,
     ):
         """
-        模式 2：牽引式 GPS 誘騙（在 EKF3 信任範圍內緩慢移動）。
+        模式 2：牽引式 GPS 實驗軌跡。
 
-        兩階段流程：
-          Phase 1 (hold_duration_s): 在起始位置靜止，等待 EKF3 完全接受偽造 GPS 源。
-          Phase 2 (total_duration_s - hold_duration_s): S-curve 加速移動，
-            消除瞬間 jerk，避免 IMU/GPS innovation 超出門檻。
-
-        EKF3 關鍵限制：
-          - EK3_GLITCH_RAD    = 25 m   → 位置跳躍超過此值將觸發 Glitch 保護
-          - EK3_POS_I_GATE    = 5σ     → 位置 innovation 門檻 ≈ 2.5 m（每次更新）
-          - EK3_VEL_I_GATE    = 5σ     → 速度 innovation 門檻 ≈ 2.5 m/s
-          - EK3_GLITCH_ACCEL  = 1.5 m/s² → Glitch 保護圓半徑成長率
-
-        成功條件：
-          1. 必須從無人機「真實 GPS 位置」出發，偏差 < 2.5 m
-          2. hold_duration_s ≥ 10s（讓 EKF3 完成 GPS 源切換）
-          3. 速度建議 ≤ 1 m/s（保守）或 ≤ 2 m/s（最大）
-          4. S-curve 峰值加速度 = 1.5 * v / T，必須 < 0.75 m/s²
-             → ramp_duration_s ≥ 1.5 * target_speed_mps / 0.75
+        軌跡使用起始靜止、S-curve 加速、巡航、S-curve 減速與
+        終點靜止五階段。EKF 是否接受 GPS 量測取決於創新量、covariance、
+        GPS 精度與載具當下運動狀態，此方法不提供 EKF3 安全保證。
 
         :param current_lat:      無人機當前真實緯度
         :param current_lon:      無人機當前真實經度
@@ -378,36 +492,15 @@ class FakeGPS:
         :param total_duration_s: 總 CSV 時長，含駐留期 (s)
         :param hold_duration_s:  Phase 1 靜止駐留時間 (s)，建議 ≥ 10s
         """
-        EK3_VEL_GATE_MPS = 2.5
-        EK3_GLITCH_ACCEL = 1.5
-        SAFE_ACCEL_RATIO = 0.5
-
-        if target_speed_mps > EK3_VEL_GATE_MPS:
-            print(
-                f"[Warning] 速度 {target_speed_mps} m/s 超過 EKF3 速度創新門檻 "
-                f"({EK3_VEL_GATE_MPS} m/s)，可能被 EKF3 拒絕！"
-            )
-
-        safe_accel = EK3_GLITCH_ACCEL * SAFE_ACCEL_RATIO
-        # S-curve 峰值加速度為線性的 1.5 倍，故 min_ramp 也需乘以 1.5
-        min_ramp = (1.5 * target_speed_mps / safe_accel) if safe_accel > 0 else 0
-        if ramp_duration_s > 0 and ramp_duration_s < min_ramp:
-            peak_accel = 1.5 * target_speed_mps / ramp_duration_s
-            print(
-                f"[Warning] S-curve 峰值加速度 {peak_accel:.3f} m/s² ≥ 安全上限 {safe_accel} m/s²"
-            )
-            print(f"          建議 ramp_duration_s ≥ {min_ramp:.1f} s")
-
-        if hold_duration_s < 5.0:
-            print(f"[Warning] hold_duration_s={hold_duration_s:.1f}s 過短，建議 ≥ 10s 讓 EKF3 完成 GPS 源接受")
-
         if output_bin is None:
             output_bin = os.path.join(
                 get_project_root(), "data", "fake_signal", "gps", "spoof_traction.bin"
             )
 
         csv_file = os.path.splitext(output_bin)[0] + "_traction.csv"
-        move_duration_s = max(0.0, total_duration_s - hold_duration_s)
+        move_duration_s = max(
+            0.0, total_duration_s - hold_duration_s - final_hold_duration_s
+        )
         peak_accel = (1.5 * target_speed_mps / ramp_duration_s) if ramp_duration_s > 0 else float("inf")
 
         print(f"\n{'='*50}")
@@ -415,10 +508,11 @@ class FakeGPS:
         print(f"    起始座標（無人機真實位置）: {current_lat:.6f}, {current_lon:.6f}, Alt={current_alt:.1f}m")
         print(f"    誘騙方向 : {heading_deg}° （0=正北, 90=正東）")
         print(f"    目標速度 : {target_speed_mps} m/s")
-        print(f"    Phase 1  : 靜止駐留 {hold_duration_s:.0f}s（EKF3 接受偽造 GPS 源）")
-        print(f"    Phase 2  : S-curve 加速 {ramp_duration_s:.0f}s → 峰值加速度 {peak_accel:.3f} m/s²")
+        print(f"    起始靜止 : {hold_duration_s:.0f}s")
+        print(f"    加/減速   : 各 {ramp_duration_s:.0f}s → 峰值加速度 {peak_accel:.3f} m/s²")
+        print(f"    終點靜止 : {final_hold_duration_s:.0f}s")
         print(f"    移動時長 : {move_duration_s:.0f}s  |  總 CSV : {total_duration_s:.0f}s")
-        print(f"    [EKF3]  速度門檻 ≤ {EK3_VEL_GATE_MPS} m/s | 安全加速度 ≤ {safe_accel} m/s²")
+        print("    [Warning] 請以 XKF3/XKF4 innovation log 確認 EKF 是否接受")
         print(f"{'='*50}")
 
         os.makedirs(os.path.dirname(output_bin), exist_ok=True)
@@ -433,6 +527,7 @@ class FakeGPS:
             ramp_duration_s=ramp_duration_s,
             total_duration_s=total_duration_s,
             hold_duration_s=hold_duration_s,
+            final_hold_duration_s=final_hold_duration_s,
         )
         if not ok:
             return
@@ -463,6 +558,9 @@ class FakeGPS:
             drift_heading_deg=0.0,
             drift_alt_jitter_m=0.0,
             sample_rate: int = 2600000,
+            scenario_start_time: str = None,
+            time_mode: str = "ephemeris",
+            process_callback=None,
         ) -> "str | None":
         """
         呼叫 gps-sdr-sim 生成 .bin 檔案。
@@ -473,11 +571,15 @@ class FakeGPS:
         :param manual_coords:       靜態模式必需參數，格式 (lat, lon, alt)
         :param csv_file:            動態模式必需參數，CSV 路徑
         :param sample_rate:         採樣率 (Hz)，必須與 transmit_bin 保持一致
+        :param scenario_start_time: 模擬起始時間 (UTC, YYYY/MM/DD,hh:mm:ss)。
+                                    靜態模式未指定時使用生成當下時間。
+        :param time_mode:           ephemeris 保留原始 TOE/TOC；
+                                    shifted-now 使用 -T now 平移星歷時間。
         :return:                    成功時回傳實際 bin 路徑；失敗回傳 None
         """
 
-        # 1. 檢查並取得星曆
-        if ephemeris_file_path is None or not check_newst_brdc():
+        # 1. 檢查並取得星曆。呼叫者明確指定時絕不替換該檔案。
+        if ephemeris_file_path is None:
             print("[*] 正在取得最新星曆檔案...")
             ephemeris_file_path = fetch_latest_ephemeris()
             if ephemeris_file_path is None:
@@ -505,6 +607,25 @@ class FakeGPS:
             "-s", str(sample_rate),
             "-b", "8",
         ]
+
+        if time_mode == "ephemeris":
+            if scenario_start_time is None:
+                scenario_start_time = self._nearest_ephemeris_time_to_now(
+                    ephemeris_file_path
+                )
+            print("    - GPS 時間模式: 星歷一致 (-t)")
+            print(f"    - 模擬起始時間 (UTC): {scenario_start_time}")
+            cmd.extend(["-t", scenario_start_time])
+        elif time_mode == "shifted-now":
+            if scenario_start_time is not None:
+                print("[Error] shifted-now 模式不可指定 scenario_start_time")
+                return None
+            print("    - GPS 時間模式: 當前時間 (-T now)")
+            print("    - [Warning] 本次模擬會在記憶體中平移星歷 TOE/TOC")
+            cmd.extend(["-T", "now"])
+        else:
+            print(f"[Error] 不支援的 GPS 時間模式: {time_mode}")
+            return None
 
         # 2. 根據模式配置參數
         if static_mode:
@@ -536,7 +657,7 @@ class FakeGPS:
                 )
                 if not ok:
                     return None
-                cmd.extend(["-u", drift_csv])
+                cmd.extend(["-x", drift_csv])
             else:
                 actual_bin = output_bin.replace(".bin", "_static.bin")
                 print(f"    - 模式: 靜態定點 (Static)")
@@ -550,17 +671,26 @@ class FakeGPS:
                 return None
             print(f"    - 模式: 動態軌跡 (Dynamic)")
             print(f"    - 軌跡: {csv_file}")
-            cmd.extend(["-u", csv_file])
+            cmd.extend(["-x", csv_file])
 
         cmd.extend(["-o", actual_bin])
 
+        process = None
         try:
-            subprocess.run(cmd, check=True)
+            process = subprocess.Popen(cmd)
+            if process_callback:
+                process_callback(process)
+            return_code = process.wait()
+            if return_code != 0:
+                raise subprocess.CalledProcessError(return_code, cmd)
             print(f"[V] 信號生成成功: {actual_bin}")
             return actual_bin
         except subprocess.CalledProcessError as e:
             print(f"[Error] gps-sdr-sim 執行失敗: {e}")
             return None
+        finally:
+            if process_callback and process is not None:
+                process_callback(None)
 
     def transmit_bin(self, bin_file, freq=1575420000, sample_rate=2600000, tx_gain=47):
         """呼叫 hackrf_transfer 發射信號"""
@@ -623,10 +753,9 @@ if __name__ == "__main__":
     #
     # 使用前請確認：
     #   - current_lat/lon/alt 填入無人機「當前真實 GPS 位置」
-    #   - hold_duration_s ≥ 10s（等待 EKF3 接受偽造 GPS 源）
-    #   - target_speed_mps ≤ 1.0 m/s（建議）或 ≤ 2.0 m/s（最大）
-    #   - S-curve 峰值加速度 = 1.5 * v / T，需 < 0.75 m/s²
-    #     → ramp_duration_s ≥ 1.5 * target_speed_mps / 0.75
+    #   - 起始坐標與載具當前 GPS 位置一致
+    #   - 載具在起始靜止階段應接近靜止
+    #   - 以 XKF3/XKF4 innovation log 驗證 EKF 是否接受 GPS 量測
     # ===========================================================
     simulator.spoof_traction(
         current_lat=23.14020741597821,    # 無人機當前真實緯度
@@ -638,5 +767,3 @@ if __name__ == "__main__":
         total_duration_s=200.0,           # 總 CSV 時長：含駐留 + 移動
         hold_duration_s=20.0,             # Phase 1 靜止駐留：20s 讓 EKF3 穩定接受
     )
-
-

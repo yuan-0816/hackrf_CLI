@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title data-i18n="app.title"></title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark" data-i18n="app.mark"></span><div><strong id="software-name" data-i18n="app.name"></strong><small id="software-version"></small></div></div>
+      <nav id="nav">
+        <button class="nav-item active" data-page="overview"><span data-i18n="nav.overview"></span></button>
+        <button class="nav-item" data-page="static"><span data-i18n="nav.static"></span></button>
+        <button class="nav-item" data-page="traction"><span data-i18n="nav.traction"></span></button>
+        <button class="nav-item" data-page="jam"><span data-i18n="nav.jam"></span></button>
+        <button class="nav-item" data-page="presets"><span data-i18n="nav.presets"></span></button>
+        <button class="nav-item" data-page="files"><span data-i18n="nav.files"></span></button>
+        <button class="nav-item" data-page="settings"><span data-i18n="nav.settings"></span></button>
+      </nav>
+      <div class="sidebar-status"><span id="rf-dot" class="dot"></span><div><small data-i18n="status.rfLabel"></small><strong id="rf-status" data-i18n="status.stopped"></strong></div></div>
+    </aside>
+    <main>
+      <div class="sticky-header">
+        <header class="topbar">
+          <div><h1 id="page-title"></h1><p id="page-description"></p></div>
+          <div class="header-actions"><span id="hardware-pill" class="pill"><span class="dot"></span><span data-i18n="hardware.checking"></span></span><button id="refresh-hardware" class="button secondary" data-i18n="actions.refreshHardware"></button><button id="global-stop" class="button danger" data-i18n="actions.stopTransmit"></button></div>
+        </header>
+        <div id="task-progress" class="progress-panel">
+          <div><strong id="progress-title" data-i18n="progress.idle"></strong><span id="progress-value"></span></div>
+          <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+          <div id="cancel-task-row" class="progress-cancel-row" hidden><button id="cancel-task" class="button cancel compact" type="button" data-i18n="actions.cancelGeneration"></button></div>
+        </div>
+        <div id="rf-progress" class="progress-panel rf-progress-panel">
+          <div><strong id="rf-progress-title" data-i18n="transmit.progress"></strong><span id="rf-countdown"></span></div>
+          <div class="progress-track"><div id="rf-progress-bar" class="progress-bar rf-progress-bar"></div></div>
+          <small id="rf-time-detail"></small>
+        </div>
+      </div>
+      <section class="page active" data-page-panel="overview">
+        <div class="cards four">
+          <article class="stat-card"><span data-i18n="overview.hardware"></span><strong id="overview-hardware"></strong><small id="hardware-detail"></small></article>
+          <article class="stat-card"><span data-i18n="overview.task"></span><strong id="overview-task"></strong><small id="task-kind"></small></article>
+          <article class="stat-card"><span data-i18n="overview.rf"></span><strong id="overview-rf"></strong><small id="rf-detail"></small></article>
+          <article class="stat-card"><span data-i18n="overview.file"></span><strong id="overview-file"></strong><small id="file-detail"></small></article>
+        </div>
+        <article class="panel hardware-panel">
+          <div class="hardware-heading"><strong data-i18n="hardware.detailsTitle"></strong><small data-i18n="hardware.detailsDescription"></small></div>
+          <dl class="hardware-details">
+            <div><dt data-i18n="hardware.boardId"></dt><dd id="hardware-board-id"></dd></div>
+            <div><dt data-i18n="hardware.serialNumber"></dt><dd id="hardware-serial"></dd></div>
+            <div><dt data-i18n="hardware.firmwareVersion"></dt><dd id="hardware-firmware"></dd></div>
+            <div><dt data-i18n="hardware.apiVersion"></dt><dd id="hardware-api"></dd></div>
+            <div><dt data-i18n="hardware.revision"></dt><dd id="hardware-revision"></dd></div>
+            <div><dt data-i18n="hardware.partId"></dt><dd id="hardware-part-id"></dd></div>
+            <div><dt data-i18n="hardware.libraryVersion"></dt><dd id="hardware-library"></dd></div>
+            <div><dt data-i18n="hardware.toolVersion"></dt><dd id="hardware-tool-version"></dd></div>
+            <div><dt data-i18n="hardware.manufacturer"></dt><dd id="hardware-manufacturer"></dd></div>
+            <div><dt data-i18n="hardware.supportedPlatform"></dt><dd id="hardware-supported-platform"></dd></div>
+          </dl>
+          <details class="hardware-output"><summary data-i18n="hardware.rawOutput"></summary><pre id="hardware-output"></pre></details>
+        </article>
+        <div class="grid two">
+          <article class="panel"><div class="panel-head"><div><h2 data-i18n="ephemeris.title"></h2><p data-i18n="ephemeris.description"></p></div><button id="update-ephemeris" class="button primary" data-i18n="ephemeris.update"></button></div><dl class="details"><div><dt data-i18n="ephemeris.path"></dt><dd id="ephemeris-path"></dd></div><div><dt data-i18n="ephemeris.range"></dt><dd id="ephemeris-range"></dd></div></dl></article>
+          <article class="panel"><div class="panel-head"><div><h2 data-i18n="task.title"></h2><p data-i18n="task.description"></p></div><span id="task-badge" class="badge" data-i18n="task.idle"></span></div><div id="task-log" class="log" data-i18n="task.noLogs"></div></article>
+        </div>
+      </section>
+      <section class="page" data-page-panel="static">
+        <div class="workspace"><div class="map-wrap"><div id="static-map" class="map"></div><div class="map-tip" id="static-map-tip" data-i18n="mapState.selectPosition"></div><div class="map-actions"><button id="static-focus-position" class="map-action" type="button" data-i18n="actions.focusPosition"></button><button id="static-reset-position" class="map-action danger" type="button" data-i18n="actions.resetPosition"></button></div></div><form id="static-form" class="control-panel">
+          <label><span data-i18n="fields.preset"></span><select id="static-preset"><option value="" data-i18n="preset.manual"></option></select></label>
+          <div class="row"><label><span data-i18n="fields.latitude"></span><input id="static-lat" type="number" step="any" required></label><label><span data-i18n="fields.longitude"></span><input id="static-lon" type="number" step="any" required></label></div>
+          <label><span data-i18n="fields.altitude"></span><div class="input-unit"><input id="static-alt" type="number" step="any" required><span data-i18n="units.meter"></span></div></label>
+          <label><span data-i18n="fields.duration"></span><div class="input-unit"><input id="static-duration" type="number" min="1" max="86400" required><span data-i18n="units.second"></span></div><small data-i18n="static.durationHint"></small></label>
+          <label><span data-i18n="fields.timeMode"></span><select id="static-time"><option value="ephemeris" data-i18n="time.ephemeris"></option><option value="shifted-now" data-i18n="time.shiftedNow"></option></select><small data-i18n="time.hint"></small></label>
+          <button class="button primary wide" type="submit" data-i18n="actions.generateStatic"></button><button class="button accent wide transmit-button" type="button" data-i18n="actions.transmit"></button>
+        </form></div>
+      </section>
+      <section class="page" data-page-panel="traction">
+        <div class="workspace"><div class="map-wrap"><div id="traction-map" class="map"></div><div class="map-tip" id="traction-map-tip" data-i18n="traction.clickStart"></div><div class="map-actions"><button id="traction-focus-start" class="map-action" type="button" data-i18n="actions.focusPosition"></button><button id="traction-reset-direction" class="map-action" type="button" data-i18n="actions.resetDirection"></button><button id="traction-reset-all" class="map-action danger" type="button" data-i18n="actions.resetStart"></button></div></div><form id="traction-form" class="control-panel scroll">
+          <label><span data-i18n="fields.preset"></span><select id="traction-preset"><option value="" data-i18n="preset.manual"></option></select></label>
+          <div class="row"><label><span data-i18n="fields.startLatitude"></span><input id="traction-lat" type="number" step="any" required></label><label><span data-i18n="fields.startLongitude"></span><input id="traction-lon" type="number" step="any" required></label></div>
+          <label><span data-i18n="fields.altitude"></span><div class="input-unit"><input id="traction-alt" type="number" step="any" required><span data-i18n="units.meter"></span></div></label>
+          <div class="row"><label><span data-i18n="fields.speed"></span><div class="input-unit"><input id="traction-speed" type="number" min="0.01" step="0.01" value="0.5" required><span data-i18n="units.mps"></span></div></label><label><span data-i18n="fields.ramp"></span><div class="input-unit"><input id="traction-ramp" type="number" min="0.1" step="0.1" value="20" required><span data-i18n="units.second"></span></div></label></div>
+          <div class="row"><label><span data-i18n="fields.duration"></span><div class="input-unit"><input id="traction-duration" type="number" min="55" max="86400" required><span data-i18n="units.second"></span></div><small id="traction-duration-hint"></small></label><label><span data-i18n="fields.initialHold"></span><div class="input-unit"><input id="traction-hold" type="number" min="0" step="0.1" value="10" required><span data-i18n="units.second"></span></div></label></div>
+          <label><span data-i18n="fields.finalHold"></span><div class="input-unit"><input id="traction-final-hold" type="number" min="0" step="0.1" value="5" required><span data-i18n="units.second"></span></div></label>
+          <label><span data-i18n="fields.timeMode"></span><select id="traction-time"><option value="ephemeris" data-i18n="time.ephemeris"></option><option value="shifted-now" data-i18n="time.shiftedNow"></option></select></label>
+          <div class="prediction"><span data-i18n="traction.prediction"></span><strong id="traction-prediction"></strong></div>
+          <button class="button primary wide" type="submit" data-i18n="actions.generateTraction"></button><button class="button accent wide transmit-button" type="button" data-i18n="actions.transmit"></button>
+        </form></div>
+      </section>
+      <section class="page" data-page-panel="jam">
+        <article class="panel narrow"><dl class="details"><div><dt data-i18n="fields.frequency"></dt><dd data-i18n="jam.frequency"></dd></div><div><dt data-i18n="fields.gain"></dt><dd id="jam-gain"></dd></div><div><dt data-i18n="fields.state"></dt><dd id="jam-state" data-i18n="status.stopped"></dd></div></dl><div class="button-row"><button id="start-jam" class="button danger" data-i18n="actions.startJam"></button><button class="button secondary stop-button" data-i18n="actions.stop"></button></div></article>
+      </section>
+      <section class="page" data-page-panel="presets">
+        <div class="grid preset-grid"><article class="panel"><div class="panel-head"><div><h2 id="preset-form-title" data-i18n="preset.addTitle"></h2><p data-i18n="preset.formHint"></p></div></div><div class="map-wrap preset-map-wrap"><div id="preset-map" class="preset-map"></div><div class="map-tip" id="preset-map-tip" data-i18n="mapState.selectPosition"></div><div class="map-actions"><button id="preset-focus-position" class="map-action" type="button" data-i18n="actions.focusPosition"></button><button id="preset-reset-position" class="map-action danger" type="button" data-i18n="actions.resetPosition"></button></div></div><form id="preset-form"><input id="preset-original-name" type="hidden"><label><span data-i18n="fields.name"></span><input id="preset-name" type="text" maxlength="80" required></label><div class="row"><label><span data-i18n="fields.latitude"></span><input id="preset-lat" type="number" step="any" required></label><label><span data-i18n="fields.longitude"></span><input id="preset-lon" type="number" step="any" required></label></div><label><span data-i18n="fields.altitude"></span><input id="preset-alt" type="number" step="any" required></label><div class="button-row"><button class="button primary" type="submit" data-i18n="actions.save"></button><button id="preset-cancel" class="button secondary" type="button" data-i18n="actions.cancelEdit"></button></div></form></article>
+          <article class="panel table-panel"><div class="panel-head"><div><h2 data-i18n="preset.listTitle"></h2><p data-i18n="preset.listHint"></p></div></div><div class="table-wrap"><table><thead><tr><th data-i18n="fields.name"></th><th data-i18n="fields.latitude"></th><th data-i18n="fields.longitude"></th><th data-i18n="fields.altitude"></th><th data-i18n="fields.actions"></th></tr></thead><tbody id="preset-table"></tbody></table></div></article></div>
+      </section>
+      <section class="page" data-page-panel="files">
+        <article class="panel file-panel">
+          <div class="panel-head">
+            <div><h2 data-i18n="files.title"></h2><p data-i18n="files.description"></p></div>
+            <div class="button-row"><button id="refresh-files" class="button secondary" type="button" data-i18n="actions.refreshFiles"></button><button id="delete-files" class="button danger" type="button" data-i18n="actions.deleteSelected"></button></div>
+          </div>
+          <div class="file-selection-summary" id="file-selection-summary"></div>
+          <div class="table-wrap"><table><thead><tr><th class="checkbox-cell"><label class="checkbox-label"><input id="select-all-files" type="checkbox"><span data-i18n="actions.selectAll"></span></label></th><th data-i18n="fields.fileName"></th><th data-i18n="fields.fileSize"></th><th data-i18n="fields.modifiedAt"></th><th data-i18n="fields.state"></th></tr></thead><tbody id="file-table"></tbody></table></div>
+        </article>
+      </section>
+      <section class="page" data-page-panel="settings">
+        <article class="panel settings-panel">
+          <div class="panel-head"><div><h2 data-i18n="settings.title"></h2><p data-i18n="settings.description"></p></div></div>
+          <form id="settings-form">
+            <h3 data-i18n="settings.hackrfSection"></h3>
+            <div class="settings-grid">
+              <label><span data-i18n="fields.frequency"></span><div class="input-unit"><input id="setting-frequency" type="number" required><span data-i18n="units.hz"></span></div></label>
+              <label><span data-i18n="fields.sampleRate"></span><div class="input-unit"><input id="setting-sample-rate" type="number" required><span data-i18n="units.hz"></span></div></label>
+              <label><span data-i18n="fields.gain"></span><div class="input-unit"><input id="setting-gain" type="number" min="0" max="47" required><span data-i18n="units.db"></span></div></label>
+              <label><span data-i18n="fields.lnaGain"></span><div class="input-unit"><input id="setting-lna-gain" type="number" min="0" max="40" step="8" required><span data-i18n="units.db"></span></div></label>
+              <label><span data-i18n="fields.vgaGain"></span><div class="input-unit"><input id="setting-vga-gain" type="number" min="0" max="62" step="2" required><span data-i18n="units.db"></span></div></label>
+            </div>
+            <h3 data-i18n="settings.gpsSection"></h3>
+            <div class="settings-grid">
+              <label><span data-i18n="fields.defaultSpeed"></span><div class="input-unit"><input id="setting-speed" type="number" min="0.01" step="0.01" required><span data-i18n="units.mps"></span></div></label>
+              <label><span data-i18n="fields.defaultAltitude"></span><div class="input-unit"><input id="setting-altitude" type="number" step="any" required><span data-i18n="units.meter"></span></div></label>
+              <label><span data-i18n="fields.staticDuration"></span><div class="input-unit"><input id="setting-static-duration" type="number" min="1" max="86400" required><span data-i18n="units.second"></span></div></label>
+              <label><span data-i18n="fields.tractionDuration"></span><div class="input-unit"><input id="setting-traction-duration" type="number" min="55" max="86400" required><span data-i18n="units.second"></span></div></label>
+              <label><span data-i18n="fields.updateRate"></span><div class="input-unit"><input id="setting-update-rate" type="number" value="10" readonly required><span data-i18n="units.hz"></span></div><small data-i18n="settings.updateRateHint"></small></label>
+              <label><span data-i18n="fields.driftHeading"></span><div class="input-unit"><input id="setting-drift-heading" type="number" min="0" max="360" step="any" required><span data-i18n="units.degree"></span></div></label>
+              <label><span data-i18n="fields.driftAltitudeJitter"></span><div class="input-unit"><input id="setting-drift-jitter" type="number" min="0" step="any" required><span data-i18n="units.meter"></span></div></label>
+            </div>
+            <h3 data-i18n="settings.ephemerisSection"></h3>
+            <div class="settings-grid">
+              <label><span data-i18n="fields.ephemerisDirectory"></span><input id="setting-ephemeris-directory" type="text" required></label>
+              <label><span data-i18n="fields.ephemerisMaxFiles"></span><input id="setting-ephemeris-max-files" type="number" min="1" max="100" required></label>
+            </div>
+            <button class="button primary" type="submit" data-i18n="actions.saveSettings"></button>
+          </form>
+        </article>
+      </section>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

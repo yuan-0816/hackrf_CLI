@@ -13,6 +13,8 @@ DEFAULT_CONFIG = {
     "gps_sim": {
         "default_speed_mps": 5.0,
         "default_height": 100.0,
+        "static_duration_s": 60,
+        "traction_duration_s": 120,
         "update_rate_hz": 10.0
     },
     "ephemeris": {
@@ -111,6 +113,40 @@ class ConfigManager:
         }
         self._write(self.config)
         self.config = self._load()
+
+    def preset_update(
+        self,
+        name: str,
+        *,
+        new_name: str | None = None,
+        lat: float | None = None,
+        lon: float | None = None,
+        alt: float | None = None,
+    ) -> bool:
+        """更新已存在的 Preset，未提供的欄位保持不變。"""
+        presets = self.config.get("presets", {})
+        if name not in presets:
+            return False
+
+        target_name = new_name.strip() if new_name is not None else name
+        if not target_name:
+            raise ValueError("Preset 名稱不可為空")
+        if target_name != name and target_name in presets:
+            raise ValueError(f"Preset 已存在: {target_name}")
+
+        current = presets[name]
+        updated = {
+            "lat": current["lat"] if lat is None else lat,
+            "lon": current["lon"] if lon is None else lon,
+            "alt": current["alt"] if alt is None else alt,
+        }
+
+        if target_name != name:
+            del presets[name]
+        presets[target_name] = updated
+        self._write(self.config)
+        self.config = self._load()
+        return True
 
     def preset_delete(self, name: str) -> bool:
         if name in self.config.get("presets", {}):

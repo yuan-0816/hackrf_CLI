@@ -95,7 +95,7 @@ def cleanup_old_files(directory, limit=5)-> None:
             pass
 
 
-def download_file(url, filename, save_dir, user, password)-> str:
+def download_file(url, filename, save_dir, user, password, force=False)-> str:
     """
     下載星歷檔案並儲存到指定目錄
     parameter:
@@ -110,35 +110,46 @@ def download_file(url, filename, save_dir, user, password)-> str:
         
     local_path = os.path.join(save_dir, filename)
     
-    if os.path.exists(local_path):
+    if os.path.exists(local_path) and not force:
         print(f"檔案已存在，跳過下載: {local_path}")
         return local_path
     
     # 檢查本地是否已經有解壓縮後的版本 (避免重複下載)
     unzipped_path = local_path.replace(".gz", "")
-    if os.path.exists(unzipped_path):
+    if os.path.exists(unzipped_path) and not force:
         print(f"已解壓檔案已存在，跳過下載: {unzipped_path}")
         return None # 回傳 None 代表不需要後續解壓縮
 
     print(f"正在從 {url} 下載...")
+    download_path = local_path + ".download"
     
     try:
         with requests.Session() as session:
             session.auth = (user, password)
-            r1 = session.request('get', url)
-            r = session.get(r1.url, auth=(user, password), stream=True)
+            r1 = session.request('get', url, timeout=(10, 60))
+            r = session.get(
+                r1.url,
+                auth=(user, password),
+                stream=True,
+                timeout=(10, 60),
+            )
             
             if r.status_code == 200:
-                with open(local_path, 'wb') as f:
+                with open(download_path, 'wb') as f:
                     for chunk in r.iter_content(chunk_size=1024):
                         if chunk:
                             f.write(chunk)
+                os.replace(download_path, local_path)
                 print(f"下載成功: {local_path}")
                 return local_path
             else:
                 print(f"下載失敗 (HTTP {r.status_code})")
                 return None
     except Exception as e:
+        try:
+            os.remove(download_path)
+        except OSError:
+            pass
         print(f"連線錯誤: {e}")
         return None
 
@@ -148,16 +159,22 @@ def uncompress_file(gz_path):
         return None
     
     out_path = gz_path.replace(".gz", "")
+    temporary_out_path = out_path + ".download"
     print(f"正在解壓縮到: {out_path}")
     
     try:
         with gzip.open(gz_path, 'rb') as f_in:
-            with open(out_path, 'wb') as f_out:
+            with open(temporary_out_path, 'wb') as f_out:
                 shutil.copyfileobj(f_in, f_out)
-        
+
+        os.replace(temporary_out_path, out_path)
         os.remove(gz_path)
         return out_path
     except Exception as e:
+        try:
+            os.remove(temporary_out_path)
+        except OSError:
+            pass
         print(f"解壓縮失敗: {e}")
         return None
 
@@ -167,7 +184,12 @@ def uncompress_file(gz_path):
 
 # ================= 對外介面 (API) =================
 
-def fetch_latest_ephemeris(save_dir=DEFAULT_SAVE_DIR, cleanup=True)-> str|None:
+def fetch_latest_ephemeris(
+    save_dir=DEFAULT_SAVE_DIR,
+    cleanup=True,
+    force=False,
+    max_files=5,
+)-> str|None:
     """
     主要功能函數：自動下載、解壓並回傳星歷檔案路徑。
     其他程式只需呼叫此函數即可。
@@ -176,6 +198,13 @@ def fetch_latest_ephemeris(save_dir=DEFAULT_SAVE_DIR, cleanup=True)-> str|None:
         cleanup (bool): 是否啟用清理舊檔機制
     return: str (檔案路徑) or None (失敗)
     """
+    # 本機已有今日解壓後的星曆時，直接使用。
+    # 這也讓離線環境不需要為了使用現有檔案而提供帳密。
+    _, filename = get_brdc_url()
+    expected_path = os.path.join(save_dir, filename.replace(".gz", ""))
+    if os.path.exists(expected_path) and not force:
+        return expected_path
+
     # 1. 檢查帳密
     user, password = _load_credentials()
     if not user or not password:
@@ -186,7 +215,14 @@ def fetch_latest_ephemeris(save_dir=DEFAULT_SAVE_DIR, cleanup=True)-> str|None:
     url, filename = get_brdc_url()
     
     # 3. 下載
-    gz_file = download_file(url, filename, save_dir, user, password)
+    gz_file = download_file(
+        url,
+        filename,
+        save_dir,
+        user,
+        password,
+        force=force,
+    )
     
     # 4. 如果下載成功 (或是需要解壓縮)
     final_file = uncompress_file(gz_file)
@@ -199,7 +235,7 @@ def fetch_latest_ephemeris(save_dir=DEFAULT_SAVE_DIR, cleanup=True)-> str|None:
     
     # 5. 清理舊檔
     if cleanup and final_file:
-        cleanup_old_files(save_dir)
+        cleanup_old_files(save_dir, limit=max_files)
         
     return final_file
 
