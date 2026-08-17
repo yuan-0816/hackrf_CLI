@@ -30,6 +30,15 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('data-i18n="app.title"', response.text)
         self.assertIn('id="software-version"', response.text)
+        self.assertIn('id="system-software-version"', response.text)
+        self.assertIn('data-i18n="systemInfo.title"', response.text)
+        self.assertNotIn('id="hardware-serial"', response.text)
+        self.assertNotIn('id="hardware-api"', response.text)
+        self.assertNotIn('id="hardware-part-id"', response.text)
+        self.assertNotIn('id="hardware-library"', response.text)
+        self.assertNotIn('id="hardware-tool-version"', response.text)
+        self.assertNotIn('id="hardware-manufacturer"', response.text)
+        self.assertNotIn('id="hardware-supported-platform"', response.text)
         self.assertNotIn('data-i18n="app.subtitle"', response.text)
         self.assertIn('id="static-focus-position"', response.text)
         self.assertIn('id="traction-focus-start"', response.text)
@@ -37,6 +46,8 @@ class WebAppTests(unittest.TestCase):
         self.assertIn('data-page="files"', response.text)
         self.assertIn('id="select-all-files"', response.text)
         self.assertIn('id="delete-files"', response.text)
+        self.assertIn('class="task-output compact"', response.text)
+        self.assertIn('data-i18n="task.fullLog"', response.text)
         self.assertIn('class="map-action"', response.text)
         frontend_script = self.client.get("/assets/app.js").text
         self.assertIn("function normalizeMapPoint", frontend_script)
@@ -54,6 +65,17 @@ class WebAppTests(unittest.TestCase):
             locale.headers["cache-control"],
             "no-cache, no-store, must-revalidate",
         )
+
+    def test_task_log_keeps_complete_history(self):
+        original_task = runtime.task
+        runtime.task = runtime._idle_task()
+        try:
+            for index in range(501):
+                runtime.add_log(f"log-{index}")
+            self.assertEqual(len(runtime.task["logs"]), 501)
+            self.assertEqual(runtime.task["logs"][0]["message"], "log-0")
+        finally:
+            runtime.task = original_task
 
     def test_bin_files_can_be_listed_and_permanently_deleted(self):
         bin_dir = Path(self.temp_dir.name) / "gps"

@@ -291,7 +291,6 @@ class RuntimeManager:
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
         with self.lock:
             self.task["logs"].append({"time": timestamp, "message": message})
-            self.task["logs"] = self.task["logs"][-500:]
 
     def set_progress(self, progress: float, phase: str):
         with self.lock:

@@ -133,6 +133,50 @@ class FakeGPSTests(unittest.TestCase):
 
             self.assertEqual(selected, "2026/08/11,04:00:00")
 
+    def test_bounds_match_gps_sdr_sim_sets_and_ignore_late_single_satellite(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ephemeris = Path(temp_dir) / "provided.nav"
+            ephemeris.write_text(
+                "     2              NAVIGATION DATA     RINEX VERSION / TYPE\n"
+                "                                                            END OF HEADER\n"
+                " 1 26  8 17  0  0  0.0-0.100000000000D-03 0.0 0.0\n"
+                " 3 26  8 17  1 59 44.0-0.200000000000D-03 0.0 0.0\n"
+                " 5 26  8 17  2  0  0.0-0.300000000000D-03 0.0 0.0\n"
+                "20 26  8 17  2 14 40.0 0.400000000000D-03 0.0 0.0\n",
+                encoding="ascii",
+            )
+
+            bounds = FakeGPS._get_ephemeris_time_bounds(str(ephemeris))
+
+            self.assertEqual(
+                bounds,
+                (
+                    datetime.datetime(
+                        2026, 8, 17, 0, 0, tzinfo=datetime.timezone.utc
+                    ),
+                    datetime.datetime(
+                        2026, 8, 17, 1, 59, 44, tzinfo=datetime.timezone.utc
+                    ),
+                ),
+            )
+
+    def test_fixed_width_epoch_parser_accepts_clock_value_without_separator(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ephemeris = Path(temp_dir) / "provided.nav"
+            ephemeris.write_text(
+                "     2              NAVIGATION DATA     RINEX VERSION / TYPE\n"
+                "                                                            END OF HEADER\n"
+                " 1 26  8 17  0  0  0.0-0.549061223865D-03 0.0 0.0\n",
+                encoding="ascii",
+            )
+
+            bounds = FakeGPS._get_ephemeris_time_bounds(str(ephemeris))
+
+            expected = datetime.datetime(
+                2026, 8, 17, 0, 0, tzinfo=datetime.timezone.utc
+            )
+            self.assertEqual(bounds, (expected, expected))
+
     def test_traction_can_exceed_five_minutes(self):
         simulator = FakeGPS()
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -2,7 +2,8 @@ const state = {
   messages: {}, presets: {}, settings: {}, status: null, files: [], selectedFiles: new Set(),
   maps: {}, markers: {}, tractionDirection: null, tractionLine: null, predictionLine: null,
   mapLocks: { static: false, tractionStart: false, tractionDirection: false, preset: false },
-  toastTimer: null, lastTaskId: null, lastTaskStatus: null, taskRequestPending: false
+  toastTimer: null, lastTaskId: null, lastTaskStatus: null, taskRequestPending: false,
+  taskLogWasLong: false
 };
 
 function value(path, source = state.messages) {
@@ -327,15 +328,8 @@ async function loadHardware(notify = false) {
     const details = hardware.details || {};
     const fields = {
       '#hardware-board-id': details.board_id,
-      '#hardware-serial': details.serial_number,
       '#hardware-firmware': details.firmware_version,
-      '#hardware-api': details.api_version,
-      '#hardware-revision': details.hardware_revision,
-      '#hardware-part-id': details.part_id,
-      '#hardware-library': details.library_version,
-      '#hardware-tool-version': details.tool_version,
-      '#hardware-manufacturer': details.manufacturer,
-      '#hardware-supported-platform': details.supported_platform
+      '#hardware-revision': details.hardware_revision
     };
     Object.entries(fields).forEach(([selector, content]) => setText(selector, content || t('status.none')));
     setText('#hardware-output', hardware.output || t('status.none'));
@@ -352,9 +346,11 @@ async function loadSoftwareInfo() {
     const software = await api('/api/software');
     setText('#software-name', software.name);
     setText('#software-version', software.version_label || software.version);
+    setText('#system-software-version', software.version);
     document.title = software.name;
   } catch (_) {
     setText('#software-version', '');
+    setText('#system-software-version', t('status.none'));
   }
 }
 
@@ -365,8 +361,15 @@ function renderStatus(payload) {
   setText('#overview-task', taskLabel); setText('#task-kind', task.kind ? t(`task.kinds.${task.kind}`) : t('status.none'));
   setText('#task-badge', taskLabel); document.querySelector('#task-badge').className = `badge ${task.status}`;
   const logs = task.logs || [];
-  setText('#task-log', logs.length ? logs.map((entry) => entry.message).join('\n') : t('task.noLogs'));
-  const logNode = document.querySelector('#task-log'); logNode.scrollTop = logNode.scrollHeight;
+  const logText = logs.length ? logs.map((entry) => entry.message).join('\n') : t('task.noLogs');
+  setText('#task-log', logText);
+  const taskLog = document.querySelector('.task-output');
+  const logIsLong = logText.length > 1200 || logText.split('\n').length > 8;
+  if (logIsLong !== state.taskLogWasLong || task.id !== state.lastTaskId) {
+    taskLog.open = !logIsLong;
+  }
+  taskLog.classList.toggle('compact', !logIsLong);
+  state.taskLogWasLong = logIsLong;
   const progressPanel = document.querySelector('#task-progress');
   const progress = Number(task.progress || 0);
   const taskActive = ['queued', 'running'].includes(task.status);

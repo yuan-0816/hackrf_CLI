@@ -58,8 +58,14 @@ class FakeGPS:
 
     @staticmethod
     def _get_ephemeris_time_bounds(ephemeris_file_path: str):
-        """讀取 RINEX 2/3 GPS navigation 檔中的最早與最晚 epoch。"""
-        epochs = []
+        """Return the start-time range accepted by this gps-sdr-sim parser.
+
+        gps-sdr-sim groups records in file order and starts a new ephemeris set
+        only when an epoch is more than one hour newer than the current set's
+        reference.  Its bounds are the lowest-PRN record in the first and last
+        sets, not the minimum and maximum epoch found anywhere in the file.
+        """
+        records = []
         in_header = True
         try:
             with open(ephemeris_file_path, "r", encoding="ascii", errors="ignore") as file:
@@ -69,38 +75,71 @@ class FakeGPS:
                             in_header = False
                         continue
 
-                    fields = line.split()
                     try:
-                        if line[:3].strip().isdigit() and len(fields) >= 7:
-                            year = int(fields[1])
+                        if len(line) >= 22 and line[:2].strip().isdigit():
+                            prn = int(line[:2])
+                            year = int(line[3:5])
                             year += 2000 if year < 80 else 1900
-                            values = [year, *map(int, fields[2:6])]
-                            second = float(fields[6])
+                            values = [
+                                year,
+                                int(line[6:8]),
+                                int(line[9:11]),
+                                int(line[12:14]),
+                                int(line[15:17]),
+                            ]
+                            second = float(line[18:22])
                         elif (
-                            len(line) >= 3
-                            and line[0].isalpha()
+                            len(line) >= 23
+                            and line[0] == "G"
                             and line[1:3].isdigit()
-                            and len(fields) >= 7
                         ):
-                            values = list(map(int, fields[1:6]))
-                            second = float(fields[6])
+                            prn = int(line[1:3])
+                            values = [
+                                int(line[4:8]),
+                                int(line[9:11]),
+                                int(line[12:14]),
+                                int(line[15:17]),
+                                int(line[18:20]),
+                            ]
+                            second = float(line[21:23])
                         else:
                             continue
 
+                        if not 1 <= prn <= 32:
+                            continue
+                        whole_second = int(second)
                         epoch = datetime.datetime(
-                            *values,
-                            int(second),
-                            tzinfo=datetime.timezone.utc,
+                            *values, whole_second, tzinfo=datetime.timezone.utc
+                        ) + datetime.timedelta(
+                            seconds=second - whole_second
                         )
-                        epochs.append(epoch)
+                        records.append((prn, epoch))
                     except (TypeError, ValueError):
                         continue
         except OSError:
             return None
 
-        if not epochs:
+        if not records:
             return None
-        return min(epochs), max(epochs)
+
+        sets = []
+        set_reference = None
+        for prn, epoch in records:
+            if (
+                set_reference is None
+                or (epoch - set_reference).total_seconds() > 3600
+            ):
+                if len(sets) >= 15:
+                    break
+                sets.append({})
+                set_reference = epoch
+            sets[-1][prn] = epoch
+
+        first_set = sets[0]
+        last_set = sets[-1]
+        earliest = first_set[min(first_set)]
+        latest = last_set[min(last_set)]
+        return earliest, latest
 
     def _nearest_ephemeris_time_to_now(self, ephemeris_file_path: str) -> str:
         now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)

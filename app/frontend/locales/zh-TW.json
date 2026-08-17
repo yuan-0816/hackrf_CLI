@@ -11,10 +11,11 @@
     "settings":{"title":"系統設定","description":"調整 HackRF 與 GPS 模擬的預設參數。"}
   },
   "overview":{"hardware":"HackRF 硬體","task":"背景任務","rf":"射頻輸出","file":"目前生成檔案"},
+  "systemInfo":{"title":"系統與硬體資訊","description":"軟體版本與 HackRF 硬體資訊","softwareVersion":"GPS Spoofing Tools 版本"},
   "hardware":{"checking":"正在檢查硬體","connected":"HackRF 已連接","dfuMode":"HackRF 處於 DFU 模式","disconnected":"未偵測到 HackRF","notInstalled":"未安裝 HackRF 工具","ready":"硬體可用","dfuUnavailable":"裝置已枚舉，但需先恢復韌體才能使用","unavailable":"硬體不可用","detailsTitle":"HackRF 詳細資訊","detailsDescription":"裝置、韌體與主機端版本資料","boardId":"裝置類型（Board ID）","serialNumber":"MCU 序號","firmwareVersion":"韌體版本","apiVersion":"USB API 版本","revision":"硬體修訂版","partId":"MCU Part ID","libraryVersion":"libhackrf 版本","toolVersion":"hackrf_info 版本","manufacturer":"製造識別","supportedPlatform":"韌體支援平台","rawOutput":"顯示完整偵測輸出"},
   "status":{"rfLabel":"射頻狀態","stopped":"已停止","transmitting":"正在發射","transmitCompleted":"發射完成","jamming":"正在屏蔽","running":"執行中","ready":"就緒","none":"無"},
   "ephemeris":{"title":"廣播星曆","description":"強制下載最新檔案，並顯示實際可用時間範圍。","update":"更新星曆","path":"檔案位置","range":"涵蓋時間"},
-  "task":{"title":"任務紀錄","description":"生成或更新星曆期間會在此顯示輸出。","idle":"閒置","queued":"等待中","running":"處理中","completed":"已完成","cancelled":"已取消","failed":"失敗","noLogs":"目前沒有任務紀錄。","kinds":{"ephemeris":"更新星曆","static_generation":"生成固定點位","traction_generation":"生成牽引路徑"}},
+  "task":{"title":"任務紀錄","description":"生成或更新星曆期間會在此顯示輸出。","fullLog":"顯示完整任務紀錄","idle":"閒置","queued":"等待中","running":"處理中","completed":"已完成","cancelled":"已取消","failed":"失敗","noLogs":"目前沒有任務紀錄。","kinds":{"ephemeris":"更新星曆","static_generation":"生成固定點位","traction_generation":"生成牽引路徑"}},
   "static":{"durationHint":"範圍 1 至 86,400 秒，不循環播放；生成前會檢查磁碟可用空間。"},
   "traction":{"clickStart":"請點擊地圖設定起點","clickDirection":"起點已鎖定，請點擊另一位置設定移動方向","directionReady":"起點與方向已鎖定；如需變更請使用重新選擇按鈕","prediction":"預估實際終點","minimumDuration":"依目前停留與加減速設定，總時長至少需要 {seconds} 秒"},
   "jam":{"frequency":"1,575,420,000 Hz"},
