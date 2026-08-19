@@ -484,16 +484,21 @@ class RuntimeManager:
         }
 
     def ephemeris_path(self):
-        current = self.current_ephemeris()["path"]
-        if current:
-            return current
-        return fetch_latest_ephemeris(
+        self.set_progress(5, "checkingEphemeris")
+        self.add_log("ephemeris_check_started")
+        path = fetch_latest_ephemeris(
             save_dir=str(
                 PROJECT_ROOT
                 / self.config.get("ephemeris.save_dir", "data/ephemeris")
             ),
             max_files=self.config.get("ephemeris.max_files", 5),
         )
+        if not path:
+            self.add_log("ephemeris_check_failed")
+            raise RuntimeError("ephemeris_update_failed")
+        self.add_log(f"ephemeris_ready: {path}")
+        self.set_progress(7, "preparing")
+        return path
 
     def generate_static(self, request: StaticGenerationRequest):
         output_dir = PROJECT_ROOT / "data" / "fake_signal" / "gps"

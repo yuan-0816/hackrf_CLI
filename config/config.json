@@ -10,9 +10,9 @@
     "default_speed_mps": 5.0,
     "default_height": 0.1,
     "static_duration_s": 60,
-    "traction_duration_s": 120,
+    "traction_duration_s": 300,
     "update_rate_hz": 10.0,
-    "drift_heading_deg": 0.0,
+    "drift_heading_deg": 90.0,
     "drift_alt_jitter_m": 0.1
   },
   "ephemeris": {
@@ -23,6 +23,11 @@
     "中華資安": {
       "lat": 25.0330718,
       "lon": 121.5245442,
+      "alt": 0.5
+    },
+    "小琉球": {
+      "lat": 22.3342484,
+      "lon": 120.3674879,
       "alt": 0.5
     }
   }

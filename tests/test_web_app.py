@@ -42,18 +42,31 @@ class WebAppTests(unittest.TestCase):
         self.assertNotIn('data-i18n="app.subtitle"', response.text)
         self.assertIn('id="static-focus-position"', response.text)
         self.assertIn('id="traction-focus-start"', response.text)
+        self.assertIn('id="traction-heading"', response.text)
+        self.assertNotIn('id="traction-duration-hint"', response.text)
         self.assertIn('id="preset-focus-position"', response.text)
         self.assertIn('data-page="files"', response.text)
+        self.assertIn('data-page="ephemeris"', response.text)
+        self.assertIn('data-page-panel="ephemeris"', response.text)
+        self.assertEqual(response.text.count('id="update-ephemeris"'), 1)
         self.assertIn('id="select-all-files"', response.text)
         self.assertIn('id="delete-files"', response.text)
         self.assertIn('class="task-output compact"', response.text)
         self.assertIn('data-i18n="task.fullLog"', response.text)
+        self.assertIn('class="header-progress-area"', response.text)
+        self.assertLess(response.text.index('class="header-progress-area"'), response.text.index('id="hardware-pill"'))
+        self.assertIn('data-i18n-aria-label="actions.cancelGeneration"', response.text)
+        self.assertNotIn('id="cancel-task-row"', response.text)
         self.assertIn('class="map-action"', response.text)
         frontend_script = self.client.get("/assets/app.js").text
         self.assertIn("function normalizeMapPoint", frontend_script)
+        self.assertIn("function syncTractionDirectionFromHeading", frontend_script)
         self.assertIn("worldCopyJump: false", frontend_script)
         self.assertNotIn("noWrap: true", frontend_script)
         self.assertIn("async function deleteSelectedFiles", frontend_script)
+        self.assertIn("payload.rf.status === 'running'", frontend_script)
+        self.assertNotIn("['running', 'completed'].includes(payload.rf.status)", frontend_script)
+        self.assertIn("&& !payload.rf.running", frontend_script)
         self.assertEqual(
             response.headers["cache-control"],
             "no-cache, no-store, must-revalidate",
@@ -61,6 +74,8 @@ class WebAppTests(unittest.TestCase):
         locale = self.client.get("/assets/locales/zh-TW.json")
         self.assertEqual(locale.status_code, 200)
         self.assertEqual(locale.json()["app"]["name"], "GPS Spoofing Tools")
+        self.assertEqual(locale.json()["nav"]["ephemeris"], "星曆更新")
+        self.assertEqual(locale.json()["progress"]["ephemerisCompleted"], "星曆更新完成")
         self.assertEqual(
             locale.headers["cache-control"],
             "no-cache, no-store, must-revalidate",
@@ -588,6 +603,28 @@ class WebAppTests(unittest.TestCase):
                 runtime.task_output,
                 runtime.generated_file,
             ) = original_values
+
+    def test_generation_always_checks_for_latest_ephemeris(self):
+        project_root = Path(self.temp_dir.name)
+        original_task = runtime.task
+        runtime.task = runtime._idle_task()
+        try:
+            with (
+                patch("app.backend.app.PROJECT_ROOT", project_root),
+                patch(
+                    "app.backend.app.fetch_latest_ephemeris",
+                    return_value="today.nav",
+                ) as fetch,
+            ):
+                result = runtime.ephemeris_path()
+
+            self.assertEqual(result, "today.nav")
+            fetch.assert_called_once_with(
+                save_dir=str(project_root / "data" / "ephemeris"),
+                max_files=5,
+            )
+        finally:
+            runtime.task = original_task
 
     def test_truncated_generated_file_is_deleted(self):
         output = Path(self.temp_dir.name) / "truncated.bin"

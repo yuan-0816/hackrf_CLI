@@ -13,6 +13,7 @@
       <div class="brand"><span class="brand-mark" data-i18n="app.mark"></span><div><strong id="software-name" data-i18n="app.name"></strong><small id="software-version"></small></div></div>
       <nav id="nav">
         <button class="nav-item active" data-page="overview"><span data-i18n="nav.overview"></span></button>
+        <button class="nav-item" data-page="ephemeris"><span data-i18n="nav.ephemeris"></span></button>
         <button class="nav-item" data-page="static"><span data-i18n="nav.static"></span></button>
         <button class="nav-item" data-page="traction"><span data-i18n="nav.traction"></span></button>
         <button class="nav-item" data-page="jam"><span data-i18n="nav.jam"></span></button>
@@ -26,18 +27,26 @@
       <div class="sticky-header">
         <header class="topbar">
           <div><h1 id="page-title"></h1><p id="page-description"></p></div>
-          <div class="header-actions"><span id="hardware-pill" class="pill"><span class="dot"></span><span data-i18n="hardware.checking"></span></span><button id="refresh-hardware" class="button secondary" data-i18n="actions.refreshHardware"></button><button id="global-stop" class="button danger" data-i18n="actions.stopTransmit"></button></div>
+          <div class="header-actions">
+            <div class="header-progress-area">
+              <div id="task-progress" class="progress-panel">
+                <div class="progress-heading">
+                  <strong id="progress-title" data-i18n="progress.idle"></strong>
+                  <span class="progress-meta"><span id="progress-value"></span><button id="cancel-task" class="progress-cancel" type="button" data-i18n-aria-label="actions.cancelGeneration" hidden>×</button></span>
+                </div>
+                <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+              </div>
+              <div id="rf-progress" class="progress-panel rf-progress-panel">
+                <div class="progress-heading"><strong id="rf-progress-title" data-i18n="transmit.progress"></strong><span id="rf-countdown"></span></div>
+                <div class="progress-track"><div id="rf-progress-bar" class="progress-bar rf-progress-bar"></div></div>
+                <small id="rf-time-detail"></small>
+              </div>
+            </div>
+            <span id="hardware-pill" class="pill"><span class="dot"></span><span data-i18n="hardware.checking"></span></span>
+            <button id="refresh-hardware" class="button secondary" data-i18n="actions.refreshHardware"></button>
+            <button id="global-stop" class="button danger" data-i18n="actions.stopTransmit"></button>
+          </div>
         </header>
-        <div id="task-progress" class="progress-panel">
-          <div><strong id="progress-title" data-i18n="progress.idle"></strong><span id="progress-value"></span></div>
-          <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
-          <div id="cancel-task-row" class="progress-cancel-row" hidden><button id="cancel-task" class="button cancel compact" type="button" data-i18n="actions.cancelGeneration"></button></div>
-        </div>
-        <div id="rf-progress" class="progress-panel rf-progress-panel">
-          <div><strong id="rf-progress-title" data-i18n="transmit.progress"></strong><span id="rf-countdown"></span></div>
-          <div class="progress-track"><div id="rf-progress-bar" class="progress-bar rf-progress-bar"></div></div>
-          <small id="rf-time-detail"></small>
-        </div>
       </div>
       <section class="page active" data-page-panel="overview">
         <div class="cards four">
@@ -56,10 +65,13 @@
           </dl>
           <details class="hardware-output"><summary data-i18n="hardware.rawOutput"></summary><pre id="hardware-output"></pre></details>
         </article>
-        <div class="grid two">
-          <article class="panel"><div class="panel-head"><div><h2 data-i18n="ephemeris.title"></h2><p data-i18n="ephemeris.description"></p></div><button id="update-ephemeris" class="button primary" data-i18n="ephemeris.update"></button></div><dl class="details"><div><dt data-i18n="ephemeris.path"></dt><dd id="ephemeris-path"></dd></div><div><dt data-i18n="ephemeris.range"></dt><dd id="ephemeris-range"></dd></div></dl></article>
-          <article class="panel"><div class="panel-head"><div><h2 data-i18n="task.title"></h2><p data-i18n="task.description"></p></div><span id="task-badge" class="badge" data-i18n="task.idle"></span></div><details class="task-output compact" open><summary data-i18n="task.fullLog"></summary><pre id="task-log" data-i18n="task.noLogs"></pre></details></article>
-        </div>
+        <article class="panel"><div class="panel-head"><div><h2 data-i18n="task.title"></h2><p data-i18n="task.description"></p></div><span id="task-badge" class="badge" data-i18n="task.idle"></span></div><details class="task-output compact" open><summary data-i18n="task.fullLog"></summary><pre id="task-log" data-i18n="task.noLogs"></pre></details></article>
+      </section>
+      <section class="page" data-page-panel="ephemeris">
+        <article class="panel ephemeris-panel">
+          <div class="panel-head"><div><h2 data-i18n="ephemeris.title"></h2><p data-i18n="ephemeris.description"></p></div><button id="update-ephemeris" class="button primary" data-i18n="ephemeris.update"></button></div>
+          <dl class="details"><div><dt data-i18n="ephemeris.path"></dt><dd id="ephemeris-path"></dd></div><div><dt data-i18n="ephemeris.range"></dt><dd id="ephemeris-range"></dd></div></dl>
+        </article>
       </section>
       <section class="page" data-page-panel="static">
         <div class="workspace"><div class="map-wrap"><div id="static-map" class="map"></div><div class="map-tip" id="static-map-tip" data-i18n="mapState.selectPosition"></div><div class="map-actions"><button id="static-focus-position" class="map-action" type="button" data-i18n="actions.focusPosition"></button><button id="static-reset-position" class="map-action danger" type="button" data-i18n="actions.resetPosition"></button></div></div><form id="static-form" class="control-panel">
@@ -75,9 +87,9 @@
         <div class="workspace"><div class="map-wrap"><div id="traction-map" class="map"></div><div class="map-tip" id="traction-map-tip" data-i18n="traction.clickStart"></div><div class="map-actions"><button id="traction-focus-start" class="map-action" type="button" data-i18n="actions.focusPosition"></button><button id="traction-reset-direction" class="map-action" type="button" data-i18n="actions.resetDirection"></button><button id="traction-reset-all" class="map-action danger" type="button" data-i18n="actions.resetStart"></button></div></div><form id="traction-form" class="control-panel scroll">
           <label><span data-i18n="fields.preset"></span><select id="traction-preset"><option value="" data-i18n="preset.manual"></option></select></label>
           <div class="row"><label><span data-i18n="fields.startLatitude"></span><input id="traction-lat" type="number" step="any" required></label><label><span data-i18n="fields.startLongitude"></span><input id="traction-lon" type="number" step="any" required></label></div>
-          <label><span data-i18n="fields.altitude"></span><div class="input-unit"><input id="traction-alt" type="number" step="any" required><span data-i18n="units.meter"></span></div></label>
+          <div class="row"><label><span data-i18n="fields.altitude"></span><div class="input-unit"><input id="traction-alt" type="number" step="any" required><span data-i18n="units.meter"></span></div></label><label><span data-i18n="fields.heading"></span><div class="input-unit"><input id="traction-heading" type="number" min="0" max="360" step="0.1" required><span data-i18n="units.degree"></span></div></label></div>
           <div class="row"><label><span data-i18n="fields.speed"></span><div class="input-unit"><input id="traction-speed" type="number" min="0.01" step="0.01" value="0.5" required><span data-i18n="units.mps"></span></div></label><label><span data-i18n="fields.ramp"></span><div class="input-unit"><input id="traction-ramp" type="number" min="0.1" step="0.1" value="20" required><span data-i18n="units.second"></span></div></label></div>
-          <div class="row"><label><span data-i18n="fields.duration"></span><div class="input-unit"><input id="traction-duration" type="number" min="55" max="86400" required><span data-i18n="units.second"></span></div><small id="traction-duration-hint"></small></label><label><span data-i18n="fields.initialHold"></span><div class="input-unit"><input id="traction-hold" type="number" min="0" step="0.1" value="10" required><span data-i18n="units.second"></span></div></label></div>
+          <div class="row"><label><span data-i18n="fields.duration"></span><div class="input-unit"><input id="traction-duration" type="number" min="55" max="86400" required><span data-i18n="units.second"></span></div></label><label><span data-i18n="fields.initialHold"></span><div class="input-unit"><input id="traction-hold" type="number" min="0" step="0.1" value="10" required><span data-i18n="units.second"></span></div></label></div>
           <label><span data-i18n="fields.finalHold"></span><div class="input-unit"><input id="traction-final-hold" type="number" min="0" step="0.1" value="5" required><span data-i18n="units.second"></span></div></label>
           <label><span data-i18n="fields.timeMode"></span><select id="traction-time"><option value="ephemeris" data-i18n="time.ephemeris"></option><option value="shifted-now" data-i18n="time.shiftedNow"></option></select></label>
           <div class="prediction"><span data-i18n="traction.prediction"></span><strong id="traction-prediction"></strong></div>

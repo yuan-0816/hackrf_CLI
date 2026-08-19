@@ -203,6 +203,7 @@ def fetch_latest_ephemeris(
     _, filename = get_brdc_url()
     expected_path = os.path.join(save_dir, filename.replace(".gz", ""))
     if os.path.exists(expected_path) and not force:
+        print(f"已存在最新的星曆檔案，跳過下載: {expected_path}")
         return expected_path
 
     # 1. 檢查帳密

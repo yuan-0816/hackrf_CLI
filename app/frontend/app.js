@@ -18,6 +18,9 @@ function t(path, params = {}) {
 
 function applyTranslations() {
   document.querySelectorAll('[data-i18n]').forEach((node) => { node.textContent = t(node.dataset.i18n); });
+  document.querySelectorAll('[data-i18n-aria-label]').forEach((node) => {
+    node.setAttribute('aria-label', t(node.dataset.i18nAriaLabel));
+  });
 }
 
 function configureSettingLimits() {
@@ -185,15 +188,11 @@ function setupMaps() {
       state.mapLocks.tractionStart = true;
       setText('#traction-map-tip', t('traction.clickDirection'));
       updateMapLockButtons();
+      syncTractionDirectionFromHeading();
     } else if (!state.mapLocks.tractionDirection) {
-      state.tractionDirection = point;
-      if (!state.markers.direction) state.markers.direction = L.circleMarker([latlng.lat, latlng.lng], { radius: 7, color: '#d79b34' }).addTo(state.maps.traction);
-      else state.markers.direction.setLatLng([latlng.lat, latlng.lng]);
-      state.mapLocks.tractionDirection = true;
-      document.querySelector('#traction-map-tip').classList.add('locked');
-      setText('#traction-map-tip', t('traction.directionReady'));
-      updateTractionPrediction();
-      updateMapLockButtons();
+      const heading = bearing(number('#traction-lat'), number('#traction-lon'), point.lat, point.lon);
+      document.querySelector('#traction-heading').value = heading.toFixed(1);
+      setTractionDirection(point);
     }
   });
   state.maps.preset = createMap('preset-map');
@@ -216,13 +215,14 @@ function removeMapLayer(name) {
   state.markers[name] = null;
 }
 
-function resetTractionDirection() {
+function resetTractionDirection(clearHeading = true) {
   state.tractionDirection = null;
   state.mapLocks.tractionDirection = false;
   removeMapLayer('direction');
   if (state.tractionLine) state.tractionLine.remove();
   if (state.predictionLine) state.predictionLine.remove();
   state.tractionLine = null; state.predictionLine = null;
+  if (clearHeading) document.querySelector('#traction-heading').value = '';
   setText('#traction-prediction', t('status.none'));
   document.querySelector('#traction-map-tip').classList.remove('locked');
   setText('#traction-map-tip', state.mapLocks.tractionStart ? t('traction.clickDirection') : t('traction.clickStart'));
@@ -273,6 +273,40 @@ function destination(lat, lon, heading, distance) {
   return { lat: p2 / rad, lon: ((lambda2 / rad + 540) % 360) - 180 };
 }
 
+function setTractionDirection(point) {
+  state.tractionDirection = point;
+  if (!state.markers.direction) {
+    state.markers.direction = L.circleMarker(
+      [point.lat, point.lon],
+      { radius: 7, color: '#d79b34' }
+    ).addTo(state.maps.traction);
+  } else {
+    state.markers.direction.setLatLng([point.lat, point.lon]);
+  }
+  state.mapLocks.tractionDirection = true;
+  document.querySelector('#traction-map-tip').classList.add('locked');
+  setText('#traction-map-tip', t('traction.directionReady'));
+  updateTractionPrediction();
+  updateMapLockButtons();
+}
+
+function syncTractionDirectionFromHeading() {
+  const input = document.querySelector('#traction-heading');
+  const heading = Number(input.value);
+  if (input.value === '' || !Number.isFinite(heading) || heading < 0 || heading > 360) {
+    resetTractionDirection(false);
+    return;
+  }
+  if (!state.mapLocks.tractionStart || !state.markers.traction) return;
+  const point = destination(
+    number('#traction-lat'),
+    number('#traction-lon'),
+    heading % 360,
+    1000
+  );
+  setTractionDirection(point);
+}
+
 function tractionValues() {
   return { lat: number('#traction-lat'), lon: number('#traction-lon'), alt: number('#traction-alt'), speed: number('#traction-speed'), ramp: number('#traction-ramp'), duration: number('#traction-duration'), hold: number('#traction-hold'), final_hold: number('#traction-final-hold') };
 }
@@ -286,7 +320,7 @@ function validateTractionDuration(showMessage = false) {
   const minimum = minimumTractionDuration();
   durationInput.min = minimum;
   const message = t('traction.minimumDuration', { seconds: Number(minimum.toFixed(1)) });
-  setText('#traction-duration-hint', message);
+  durationInput.title = message;
   const valid = number('#traction-duration') >= minimum;
   durationInput.setCustomValidity(valid ? '' : message);
   if (!valid && showMessage) toast(message, true);
@@ -375,18 +409,18 @@ function renderStatus(payload) {
   const taskActive = ['queued', 'running'].includes(task.status);
   const generationActive = taskActive && ['static_generation', 'traction_generation'].includes(task.kind);
   const finishedAge = task.finished_at ? Date.now() - new Date(task.finished_at).getTime() : 0;
-  const showTaskProgress = Boolean(task.id) && (
-    taskActive || finishedAge < 8000
-  );
+  const showTaskProgress = Boolean(task.id)
+    && !payload.rf.running
+    && (taskActive || finishedAge < 8000);
   progressPanel.classList.toggle('visible', showTaskProgress);
   document.querySelector('#progress-bar').style.width = `${progress}%`;
   setText('#progress-value', t('progress.percentage', { value: progress.toFixed(progress % 1 ? 1 : 0) }));
-  const progressKey = task.kind === 'ephemeris' && ['queued','running'].includes(task.status)
-    ? 'progress.ephemeris'
-    : `progress.${task.progress_phase || (task.status === 'idle' ? 'idle' : 'preparing')}`;
+  let progressKey = `progress.${task.progress_phase || (task.status === 'idle' ? 'idle' : 'preparing')}`;
+  if (task.kind === 'ephemeris' && taskActive) progressKey = 'progress.ephemeris';
+  if (task.kind === 'ephemeris' && task.status === 'completed') progressKey = 'progress.ephemerisCompleted';
   setText('#progress-title', t(progressKey));
   const cancelTaskButton = document.querySelector('#cancel-task');
-  document.querySelector('#cancel-task-row').hidden = !generationActive;
+  cancelTaskButton.hidden = !generationActive;
   cancelTaskButton.disabled = task.progress_phase === 'cancelling';
   const rfKey = payload.rf.running
     ? (payload.rf.mode === 'jam' ? 'jamming' : 'transmitting')
@@ -404,16 +438,14 @@ function renderStatus(payload) {
   const rfProgressPanel = document.querySelector('#rf-progress');
   const showRfProgress = !showTaskProgress
     && payload.rf.mode === 'transmit'
-    && ['running', 'completed'].includes(payload.rf.status);
+    && payload.rf.status === 'running';
   rfProgressPanel.classList.toggle('visible', showRfProgress);
   if (showRfProgress) {
     const rfProgress = Math.max(0, Math.min(100, Number(payload.rf.progress || 0)));
     document.querySelector('#rf-progress-bar').style.width = `${rfProgress}%`;
-    setText('#rf-progress-title', t(payload.rf.status === 'completed' ? 'transmit.completed' : 'transmit.progress'));
-    const percentage = t('progress.percentage', { value: rfProgress.toFixed(payload.rf.status === 'completed' ? 0 : 1) });
-    setText('#rf-countdown', payload.rf.status === 'completed'
-      ? percentage
-      : `${t('transmit.remaining', { time: formatDuration(payload.rf.remaining) })} · ${percentage}`);
+    setText('#rf-progress-title', t('transmit.progress'));
+    const percentage = t('progress.percentage', { value: rfProgress.toFixed(1) });
+    setText('#rf-countdown', `${t('transmit.remaining', { time: formatDuration(payload.rf.remaining) })} · ${percentage}`);
     setText('#rf-time-detail', t('transmit.timeDetail', {
       elapsed: formatDuration(payload.rf.elapsed),
       duration: formatDuration(payload.rf.duration)
@@ -669,6 +701,7 @@ function bindEvents() {
   document.querySelector('#traction-reset-direction').addEventListener('click', resetTractionDirection);
   document.querySelector('#traction-reset-all').addEventListener('click', resetTractionStart);
   document.querySelector('#traction-focus-start').addEventListener('click', () => focusMapMarker('traction'));
+  document.querySelector('#traction-heading').addEventListener('input', syncTractionDirectionFromHeading);
   document.querySelector('#preset-reset-position').addEventListener('click', resetPresetPosition);
   document.querySelector('#preset-focus-position').addEventListener('click', () => focusMapMarker('preset'));
   document.querySelector('#static-form').addEventListener('submit', async (event) => {
