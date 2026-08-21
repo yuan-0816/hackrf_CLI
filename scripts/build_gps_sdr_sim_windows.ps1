@@ -16,7 +16,7 @@ $outputName = "gps-sdr-sim.exe"
 
 if (-not (Test-Path -LiteralPath $gpsSourcePath) -or
     -not (Test-Path -LiteralPath $getoptSourcePath)) {
-    throw "找不到 gps-sdr-sim 原始碼。請先初始化 third_party/gps-sdr-sim。"
+    throw "gps-sdr-sim sources are missing from third_party/gps-sdr-sim."
 }
 
 $defines = @(
@@ -42,20 +42,20 @@ try {
             $gpsSource $getoptSource "/Fe:$outputName"
     }
     elseif ($uv) {
-        Write-Output "找不到本機 C 編譯器，改由 uv 暫時取得 Zig 編譯器。"
+        Write-Output "No local C compiler found. Building with Zig through uv."
         & $uv.Source tool run --from ziglang python-zig cc -O3 @defines `
             $gpsSource $getoptSource -o $outputName
     }
     else {
-        throw "找不到 C 編譯器或 uv。請先安裝 uv 後重試。"
+        throw "No C compiler or uv installation was found. Install uv and retry."
     }
 
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $output)) {
-        throw "gps-sdr-sim Windows 編譯失敗，結束代碼: $LASTEXITCODE"
+        throw "gps-sdr-sim build failed with exit code $LASTEXITCODE."
     }
 }
 finally {
     Pop-Location
 }
 
-Write-Output "gps-sdr-sim Windows 執行檔已建立: $output"
+Write-Output "gps-sdr-sim Windows executable created: $output"
