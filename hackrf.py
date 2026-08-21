@@ -236,7 +236,11 @@ def cmd_info(_args=None):
     header("硬體資訊")
     try:
         result = subprocess.run(
-            [hackrf.info_exec], capture_output=True, text=True, check=False
+            [hackrf.info_exec],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            check=False,
         )
         output = (result.stdout + result.stderr).strip()
         print(output if output else "  [!] 未偵測到 HackRF 設備")

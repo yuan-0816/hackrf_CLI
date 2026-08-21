@@ -123,7 +123,9 @@ NASA_PASS="你的 Earthdata 密碼"
 .\start_windows.ps1
 ```
 
-腳本會安裝鎖定的 Python 套件、在缺少時自動建置 `gps-sdr-sim.exe`、執行 HackRF 偵測，最後啟動網頁伺服器。瀏覽器開啟：
+腳本會安裝鎖定的 Python 套件、在缺少時自動建置 `gps-sdr-sim.exe`、執行 HackRF 偵測，最後啟動網頁伺服器。它會先檢查 `127.0.0.1:8000` 是否可綁定；若該埠已被占用或被 Windows 保留，會自動依序尋找 8001 至 8100，並在 PowerShell 顯示實際網址。
+
+未發生埠衝突時，瀏覽器開啟：
 
 ```text
 http://127.0.0.1:8000
@@ -142,6 +144,18 @@ uv run uvicorn app.backend.app:app --host 127.0.0.1 --port 8000
 ```
 
 停止伺服器請在 PowerShell 按 `Ctrl+C`。
+
+也可以指定搜尋起始埠：
+
+```powershell
+.\start_windows.ps1 -Port 8080
+```
+
+腳本會從 8080 開始尋找可用埠。若使用 `-ExecutionPolicy Bypass`，參數放在腳本路徑後面：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start_windows.ps1 -Port 8080
+```
 
 ### 8. 使用 CLI
 
@@ -275,6 +289,20 @@ powershell -ExecutionPolicy Bypass -File .\start_windows.ps1
 ```
 
 此指令只調整該次 PowerShell 程序，不會永久修改全機執行原則。
+
+### Windows 顯示 WinError 10013 或埠已被占用
+
+使用 `start_windows.ps1` 時，腳本會自動跳過被占用或被 Windows 保留的埠，並顯示實際網址。也可以指定另一個搜尋起始埠：
+
+```powershell
+.\start_windows.ps1 -Port 8080
+```
+
+若要手動使用 uv 啟動，請自行指定可用埠：
+
+```powershell
+uv run uvicorn app.backend.app:app --host 127.0.0.1 --port 8080
+```
 
 ### 星曆更新失敗
 

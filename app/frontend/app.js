@@ -369,6 +369,11 @@ async function loadHardware(notify = false) {
     setText('#hardware-output', hardware.output || t('status.none'));
     if (notify) toast(t('messages.hardwareRefreshed'));
   } catch (error) {
+    const label = t('hardware.disconnected');
+    setText('#hardware-pill span:last-child', label);
+    setText('#overview-hardware', label);
+    setText('#hardware-detail', t('hardware.unavailable'));
+    document.querySelector('#hardware-pill .dot').className = 'dot error';
     toast(error.message, true);
   } finally {
     refreshButton.disabled = false;

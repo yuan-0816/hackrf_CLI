@@ -1,8 +1,12 @@
 import os
 import shutil
+import signal
 import subprocess
 
 from utils.executable_paths import resolve_hackrf_executable
+
+WINDOWS_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+WINDOWS_CTRL_BREAK_EVENT = getattr(signal, "CTRL_BREAK_EVENT", None)
 
 
 class HackRFCLI:
@@ -34,6 +38,7 @@ class HackRFCLI:
                 [self.info_exec],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=10,
                 check=False,
             )
@@ -55,7 +60,9 @@ class HackRFCLI:
                 "stderr": subprocess.DEVNULL,
             }
             if os.name == "nt":
-                popen_options["creationflags"] = subprocess.CREATE_NO_WINDOW
+                # hackrf_transfer must receive a console control event so it can
+                # call hackrf_stop_tx and return the radio to idle mode.
+                popen_options["creationflags"] = WINDOWS_PROCESS_GROUP
             self.process = subprocess.Popen(
                 cmd_args,
                 **popen_options,
@@ -198,14 +205,28 @@ class HackRFCLI:
         return self.process.poll() is None
 
     def stop(self):
-        if self.is_running():
+        process = self.process
+        if process is None:
+            return
+
+        if process.poll() is None:
             print("[*] 正在停止 HackRF...")
-            self.process.terminate()
             try:
-                self.process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-            self.process = None
+                if os.name == "nt" and WINDOWS_CTRL_BREAK_EVENT is not None:
+                    process.send_signal(WINDOWS_CTRL_BREAK_EVENT)
+                else:
+                    process.terminate()
+                process.wait(timeout=5)
+            except OSError, subprocess.TimeoutExpired:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+
+        self.process = None
+        if process.poll() is not None:
             print("[V] HackRF 已停止")
 
     def wait(self):

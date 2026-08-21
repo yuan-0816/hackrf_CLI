@@ -60,6 +60,7 @@ def inspect_hackrf():
             [resolve_hackrf_executable("hackrf_info")],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=10,
             check=False,
         )
@@ -125,6 +126,7 @@ def inspect_hackrf():
                 usb_command,
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=5,
                 check=False,
             )

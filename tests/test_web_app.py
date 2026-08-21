@@ -238,6 +238,29 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["connected"])
 
+    def test_hardware_refresh_reports_unplugged_device_without_error(self):
+        info_result = SimpleNamespace(
+            returncode=1,
+            stdout="No HackRF boards found.\n",
+            stderr="",
+        )
+        usb_result = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with patch(
+            "app.backend.app.subprocess.run",
+            side_effect=[info_result, usb_result],
+        ) as run:
+            response = self.client.get("/api/hardware")
+
+        self.assertEqual(response.status_code, 200)
+        hardware = response.json()
+        self.assertFalse(hardware["connected"])
+        self.assertTrue(hardware["installed"])
+        self.assertEqual(hardware["mode"], "unavailable")
+        self.assertEqual(hardware["error"], "hackrf_not_connected")
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[0].kwargs["errors"], "replace")
+        self.assertEqual(run.call_args_list[1].kwargs["errors"], "replace")
+
     def test_hardware_info_parses_device_details(self):
         output = (
             "hackrf_info version: 2024.02.1\n"
