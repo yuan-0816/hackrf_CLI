@@ -235,7 +235,9 @@ def _list_files(directory: str, extension: str) -> list[str]:
 def cmd_info(_args=None):
     header("硬體資訊")
     try:
-        result = subprocess.run(["hackrf_info"], capture_output=True, text=True)
+        result = subprocess.run(
+            [hackrf.info_exec], capture_output=True, text=True, check=False
+        )
         output = (result.stdout + result.stderr).strip()
         print(output if output else "  [!] 未偵測到 HackRF 設備")
     except FileNotFoundError:

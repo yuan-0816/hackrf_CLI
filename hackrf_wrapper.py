@@ -2,28 +2,44 @@ import os
 import shutil
 import subprocess
 
+from utils.executable_paths import resolve_hackrf_executable
+
+
 class HackRFCLI:
     def __init__(self):
         """
         初始化 HackRF CLI 封裝器
         會自動檢查系統中是否有 hackrf_transfer 和 hackrf_sweep
         """
-        self.transfer_exec = "hackrf_transfer"
-        self.sweep_exec = "hackrf_sweep"
+        self.info_exec = resolve_hackrf_executable("hackrf_info")
+        self.transfer_exec = resolve_hackrf_executable("hackrf_transfer")
+        self.sweep_exec = resolve_hackrf_executable("hackrf_sweep")
         self.process = None
 
     def is_installed(self):
         """檢查必要指令是否存在"""
-        t_check = shutil.which(self.transfer_exec) is not None
-        s_check = shutil.which(self.sweep_exec) is not None
+        t_check = (
+            os.path.isfile(self.transfer_exec)
+            or shutil.which(self.transfer_exec) is not None
+        )
+        s_check = (
+            os.path.isfile(self.sweep_exec) or shutil.which(self.sweep_exec) is not None
+        )
         return t_check and s_check
 
     def is_device_connected(self):
         """透過 hackrf_info 檢查連接"""
         try:
-            result = subprocess.run(["hackrf_info"], capture_output=True, text=True)
-            return "Found HackRF" in result.stdout
-        except FileNotFoundError:
+            result = subprocess.run(
+                [self.info_exec],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            output = result.stdout + result.stderr
+            return result.returncode == 0 and "Found HackRF" in output
+        except FileNotFoundError, subprocess.TimeoutExpired:
             return False
 
     def _start_process(self, cmd_args):
@@ -34,10 +50,15 @@ class HackRFCLI:
 
         try:
             # 使用 Popen 啟動 (非阻塞)
+            popen_options = {
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+            }
+            if os.name == "nt":
+                popen_options["creationflags"] = subprocess.CREATE_NO_WINDOW
             self.process = subprocess.Popen(
                 cmd_args,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                **popen_options,
             )
             return True
         except FileNotFoundError as e:
@@ -47,7 +68,15 @@ class HackRFCLI:
             print(f"[Error] 啟動失敗: {e}")
             return False
 
-    def start_tx(self, filename, freq_hz, sample_rate_hz=2600000, amp=False, tx_gain=0, repeat=False):
+    def start_tx(
+        self,
+        filename,
+        freq_hz,
+        sample_rate_hz=2600000,
+        amp=False,
+        tx_gain=0,
+        repeat=False,
+    ):
         """
         [hackrf_transfer] 定頻發射 (GPS模擬用這個)
         :param tx_gain: 0-47dB
@@ -58,11 +87,16 @@ class HackRFCLI:
 
         cmd = [
             self.transfer_exec,
-            "-t", filename,
-            "-f", str(int(freq_hz)),
-            "-s", str(int(sample_rate_hz)),
-            "-a", "1" if amp else "0",
-            "-x", str(int(tx_gain)) # TX VGA Gain
+            "-t",
+            filename,
+            "-f",
+            str(int(freq_hz)),
+            "-s",
+            str(int(sample_rate_hz)),
+            "-a",
+            "1" if amp else "0",
+            "-x",
+            str(int(tx_gain)),  # TX VGA Gain
         ]
         if repeat:
             cmd.append("-R")
@@ -70,7 +104,16 @@ class HackRFCLI:
         print(f"[*] 啟動 TX 發射: Freq={freq_hz}Hz, Gain={tx_gain}, File={filename}")
         return self._start_process(cmd)
 
-    def start_rx(self, filename, freq_hz, sample_rate_hz=2600000, amp=False, lna_gain=16, vga_gain=20, num_samples=None):
+    def start_rx(
+        self,
+        filename,
+        freq_hz,
+        sample_rate_hz=2600000,
+        amp=False,
+        lna_gain=16,
+        vga_gain=20,
+        num_samples=None,
+    ):
         """
         [hackrf_transfer] 定頻接收 (錄製訊號)
         :param lna_gain: 0-40dB (8dB steps)
@@ -78,21 +121,39 @@ class HackRFCLI:
         """
         cmd = [
             self.transfer_exec,
-            "-r", filename,
-            "-f", str(int(freq_hz)),
-            "-s", str(int(sample_rate_hz)),
-            "-a", "1" if amp else "0",
-            "-l", str(int(lna_gain)),
-            "-g", str(int(vga_gain)) # RX VGA Gain
+            "-r",
+            filename,
+            "-f",
+            str(int(freq_hz)),
+            "-s",
+            str(int(sample_rate_hz)),
+            "-a",
+            "1" if amp else "0",
+            "-l",
+            str(int(lna_gain)),
+            "-g",
+            str(int(vga_gain)),  # RX VGA Gain
         ]
         if num_samples is not None:
             cmd.extend(["-n", str(int(num_samples))])
 
-        print(f"[*] 啟動 RX 接收: Freq={freq_hz}Hz, LNA={lna_gain}, VGA={vga_gain} -> {filename}")
+        print(
+            f"[*] 啟動 RX 接收: Freq={freq_hz}Hz, LNA={lna_gain}, VGA={vga_gain} -> {filename}"
+        )
         return self._start_process(cmd)
 
-    def start_sweep(self, output_file, freq_min_mhz, freq_max_mhz, bin_width_hz=1000000, 
-                    amp=False, lna_gain=16, vga_gain=20, one_shot=False, num_sweeps=None):
+    def start_sweep(
+        self,
+        output_file,
+        freq_min_mhz,
+        freq_max_mhz,
+        bin_width_hz=1000000,
+        amp=False,
+        lna_gain=16,
+        vga_gain=20,
+        one_shot=False,
+        num_sweeps=None,
+    ):
         """
         [hackrf_sweep] 頻譜掃描
         :param freq_min_mhz: 起始頻率 (MHz)
@@ -102,30 +163,38 @@ class HackRFCLI:
         """
         # 根據文件: -f freq_min:freq_max (單位 MHz)
         freq_range = f"{int(freq_min_mhz)}:{int(freq_max_mhz)}"
-        
+
         cmd = [
             self.sweep_exec,
-            "-f", freq_range,
-            "-w", str(int(bin_width_hz)),
-            "-a", "1" if amp else "0",
-            "-l", str(int(lna_gain)),
-            "-g", str(int(vga_gain))
+            "-f",
+            freq_range,
+            "-w",
+            str(int(bin_width_hz)),
+            "-a",
+            "1" if amp else "0",
+            "-l",
+            str(int(lna_gain)),
+            "-g",
+            str(int(vga_gain)),
         ]
 
         if output_file:
             cmd.extend(["-r", output_file])
-        
+
         if one_shot:
             cmd.append("-1")
-        
+
         if num_sweeps:
             cmd.extend(["-N", str(int(num_sweeps))])
 
-        print(f"[*] 啟動 Sweep 掃描: Range={freq_range} MHz, Width={bin_width_hz}Hz -> {output_file}")
+        print(
+            f"[*] 啟動 Sweep 掃描: Range={freq_range} MHz, Width={bin_width_hz}Hz -> {output_file}"
+        )
         return self._start_process(cmd)
 
     def is_running(self):
-        if self.process is None: return False
+        if self.process is None:
+            return False
         return self.process.poll() is None
 
     def stop(self):
@@ -143,6 +212,7 @@ class HackRFCLI:
         """阻塞直到程式結束"""
         if self.is_running():
             self.process.wait()
+
 
 if __name__ == "__main__":
     # === 使用範例 ===

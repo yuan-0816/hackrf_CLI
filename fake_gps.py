@@ -10,6 +10,7 @@ import random
 
 from utils.get_latest_brdc import fetch_latest_ephemeris
 from utils.tool import *
+from utils.executable_paths import default_gps_sim_executable
 from hackrf_wrapper import HackRFCLI
 
 class FakeGPS:
@@ -21,9 +22,7 @@ class FakeGPS:
         target_speed_mps=10.0,
         update_rate_hz=10.0,
         default_height=100.0,
-        gps_sim_exe_path=os.path.join(
-            get_project_root(), "third_party", "gps-sdr-sim", "gps-sdr-sim"
-        ),
+        gps_sim_exe_path=None,
     ):
         """
         初始化 GPS 模擬器參數
@@ -35,6 +34,7 @@ class FakeGPS:
         self.target_speed_mps = target_speed_mps
         self.update_rate_hz = update_rate_hz
         self.default_height = default_height
+        gps_sim_exe_path = gps_sim_exe_path or default_gps_sim_executable()
         self.gps_sim_exe_path = self._resolve_executable_path(gps_sim_exe_path)
 
         if not math.isclose(self.update_rate_hz, self.MOTION_RATE_HZ):

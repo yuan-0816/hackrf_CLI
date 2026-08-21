@@ -31,6 +31,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from fake_gps import FakeGPS
 from hackrf_wrapper import HackRFCLI
 from utils.config_manager import ConfigManager
+from utils.executable_paths import is_windows, resolve_hackrf_executable
 from utils.get_latest_brdc import fetch_latest_ephemeris
 
 GPS_L1_FREQUENCY_HZ = 1_575_420_000
@@ -56,7 +57,7 @@ PROJECT_METADATA = project_metadata()
 def inspect_hackrf():
     try:
         result = subprocess.run(
-            ["hackrf_info"],
+            [resolve_hackrf_executable("hackrf_info")],
             capture_output=True,
             text=True,
             timeout=10,
@@ -115,14 +116,23 @@ def inspect_hackrf():
     dfu_mode = False
     if not connected:
         try:
+            usb_command = (
+                ["pnputil", "/enum-devices", "/connected", "/deviceids"]
+                if is_windows()
+                else ["lsusb"]
+            )
             usb_result = subprocess.run(
-                ["lsusb"],
+                usb_command,
                 capture_output=True,
                 text=True,
                 timeout=5,
                 check=False,
             )
-            dfu_mode = "1fc9:000c" in usb_result.stdout.lower()
+            usb_output = (usb_result.stdout + usb_result.stderr).lower()
+            dfu_mode = (
+                "1fc9:000c" in usb_output
+                or "vid_1fc9&pid_000c" in usb_output
+            )
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
     mode = "normal" if connected else "dfu" if dfu_mode else "unavailable"
@@ -314,8 +324,20 @@ class RuntimeManager:
     def validate_generated_duration(path: Path, requested_duration: float, sample_rate: int):
         actual_duration = path.stat().st_size / (sample_rate * 2)
         if actual_duration + 0.2 < requested_duration:
-            path.unlink(missing_ok=True)
+            RuntimeManager.remove_file(path)
             raise RuntimeError("generated_duration_mismatch")
+
+    @staticmethod
+    def remove_file(path: Path, attempts: int = 10):
+        """Remove a file, tolerating short-lived Windows sharing races."""
+        for attempt in range(attempts):
+            try:
+                path.unlink(missing_ok=True)
+                return
+            except PermissionError:
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(0.05)
 
     def ensure_idle(self):
         if self.task["status"] in {"queued", "running"}:
@@ -410,7 +432,7 @@ class RuntimeManager:
                     datetime.timezone.utc
                 ).isoformat()
             if output:
-                output.unlink(missing_ok=True)
+                self.remove_file(output)
 
     def cancel_task(self):
         with self.lock:
@@ -430,7 +452,7 @@ class RuntimeManager:
                 process.kill()
                 process.wait(timeout=3)
         if output:
-            output.unlink(missing_ok=True)
+            self.remove_file(output)
 
     def simulator(self):
         return FakeGPS(
